@@ -1,0 +1,54 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: processador_diagramas_reporting_service_api
+    ports:
+      - "5081:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=processador_diagramas_reporting;Username=postgres;Password=postgres
+      - ProcessingService__BaseUrl=http://processador-diagramas-processingservice
+      - ProcessingService__TimeoutSeconds=30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: processador_diagramas_reporting_service_migrate
+    entrypoint:
+      - /bin/sh
+      - -c
+      - /app/efbundle --connection "$$ConnectionStrings__DefaultConnection"
+    environment:
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=processador_diagramas_reporting;Username=postgres;Password=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: processador_diagramas_reporting_service_postgres
+    environment:
+      POSTGRES_DB: processador_diagramas_reporting
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:

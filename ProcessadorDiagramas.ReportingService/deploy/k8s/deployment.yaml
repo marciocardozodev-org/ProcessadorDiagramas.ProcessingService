@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processador-diagramas-reportingservice
+  labels:
+    app: processador-diagramas-reportingservice
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: processador-diagramas-reportingservice
+  template:
+    metadata:
+      labels:
+        app: processador-diagramas-reportingservice
+    spec:
+      containers:
+        - name: processador-diagramas-reportingservice
+          image: marciocardozodev/processador-diagramas-reportingservice:${IMAGE_TAG}
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: processador-diagramas-reportingservice-config
+            - secretRef:
+                name: processador-diagramas-reportingservice-secrets
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

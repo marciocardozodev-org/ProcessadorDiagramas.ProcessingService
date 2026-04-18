@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: processador-diagramas-reportingservice
+  labels:
+    app: processador-diagramas-reportingservice
+spec:
+  type: ClusterIP
+  selector:
+    app: processador-diagramas-reportingservice
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

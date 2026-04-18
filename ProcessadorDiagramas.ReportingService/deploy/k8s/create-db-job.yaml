@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: processador-diagramas-reportingservice-migrations
+  labels:
+    app: processador-diagramas-reportingservice
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: processador-diagramas-reportingservice
+        job-name: processador-diagramas-reportingservice-migrations
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrations
+          image: marciocardozodev/processador-diagramas-reportingservice:${IMAGE_TAG}
+          imagePullPolicy: Always
+          envFrom:
+            - secretRef:
+                name: processador-diagramas-reportingservice-secrets
+          command:
+            - /bin/sh
+            - -c
+            - /app/efbundle --connection "$ConnectionStrings__DefaultConnection"

@@ -1,0 +1,3 @@
+namespace ProcessadorDiagramas.ReportingService.Application.Queries.GetOrGenerateAnalysisReport;
+
+public sealed record GetOrGenerateAnalysisReportQuery(Guid AnalysisProcessId);

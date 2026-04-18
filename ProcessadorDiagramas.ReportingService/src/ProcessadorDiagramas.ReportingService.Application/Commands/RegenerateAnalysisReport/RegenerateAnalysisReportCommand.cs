@@ -1,0 +1,3 @@
+namespace ProcessadorDiagramas.ReportingService.Application.Commands.RegenerateAnalysisReport;
+
+public sealed record RegenerateAnalysisReportCommand(Guid AnalysisProcessId);
