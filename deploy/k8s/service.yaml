@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: processador-diagramas-processingservice
+  labels:
+    app: processador-diagramas-processingservice
+spec:
+  type: ClusterIP
+  selector:
+    app: processador-diagramas-processingservice
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

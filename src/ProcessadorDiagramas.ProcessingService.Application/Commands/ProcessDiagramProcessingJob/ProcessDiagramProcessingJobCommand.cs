@@ -1,0 +1,3 @@
+namespace ProcessadorDiagramas.ProcessingService.Application.Commands.ProcessDiagramProcessingJob;
+
+public sealed record ProcessDiagramProcessingJobCommand(Guid JobId);

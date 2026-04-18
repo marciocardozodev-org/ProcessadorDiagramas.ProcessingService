@@ -1,0 +1,86 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: processador_diagramas_processing_service_api
+    ports:
+      - "5080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:8080
+      - EnableAwsServices=true
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=processador_diagramas_processing;Username=postgres;Password=postgres
+      - Aws__Region=us-east-1
+      - Aws__QueueUrl=http://localstack:4566/000000000000/analysis-process-requests
+      - Aws__TopicArn=arn:aws:sns:us-east-1:000000000000:analysis-processing-events
+      - Aws__ServiceURL=http://localstack:4566
+    volumes:
+      - ./tmp/inputs:/tmp/processing-inputs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: processador_diagramas_processing_service_migrate
+    entrypoint:
+      - /bin/sh
+      - -c
+      - /app/efbundle --connection "$$ConnectionStrings__DefaultConnection"
+    environment:
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=processador_diagramas_processing;Username=postgres;Password=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: processador_diagramas_processing_service_postgres
+    environment:
+      POSTGRES_DB: processador_diagramas_processing
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:3
+    container_name: processador_diagramas_processing_service_localstack
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=sns,sqs
+      - DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - ./scripts/localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:4566/_localstack/health >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_data:
+  localstack_data:
