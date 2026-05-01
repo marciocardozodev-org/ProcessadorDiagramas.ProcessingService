@@ -18,6 +18,15 @@ services:
       - Aws__QueueUrl=http://localstack:4566/000000000000/analysis-process-requests
       - Aws__TopicArn=arn:aws:sns:us-east-1:000000000000:analysis-processing-events
       - Aws__ServiceURL=http://localstack:4566
+      - AiProvider__Enabled=${AIPROVIDER__ENABLED:-false}
+      - AiProvider__Provider=${AIPROVIDER__PROVIDER:-OpenAICompatible}
+      - AiProvider__BaseUrl=${AIPROVIDER__BASEURL:-https://api.openai.com/}
+      - AiProvider__ApiKey=${AIPROVIDER__APIKEY:-}
+      - AiProvider__Model=${AIPROVIDER__MODEL:-gpt-4o-mini}
+      - AiProvider__Temperature=${AIPROVIDER__TEMPERATURE:-0.2}
+      - AiProvider__MaxTokens=${AIPROVIDER__MAXTOKENS:-500}
+      - AiProvider__MaxInputCharacters=${AIPROVIDER__MAXINPUTCHARACTERS:-12000}
+      - AiProvider__TimeoutSeconds=${AIPROVIDER__TIMEOUTSECONDS:-60}
     volumes:
       - ./tmp/inputs:/tmp/processing-inputs
     depends_on:

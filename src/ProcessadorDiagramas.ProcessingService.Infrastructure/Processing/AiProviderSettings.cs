@@ -18,5 +18,7 @@ public sealed class AiProviderSettings
 
     public int MaxTokens { get; set; } = 1200;
 
+    public int MaxInputCharacters { get; set; } = 12000;
+
     public int TimeoutSeconds { get; set; } = 60;
 }
