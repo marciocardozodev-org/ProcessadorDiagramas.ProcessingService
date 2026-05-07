@@ -1,289 +1,235 @@
-name: serverless-homolog-e2e
+name: CI/CD - ProcessadorDiagramas.ProcessingService
 
 on:
-  pull_request:
-    branches: [ main, develop, homolog, master ]
   push:
-    branches: [ main, develop, homolog, master ]
-  workflow_dispatch:
+    branches: [ develop, homolog, master ]
+  pull_request:
+    branches: [ develop, homolog, master ]
 
-permissions:
-  contents: read
-  security-events: write
+env:
+  DOTNET_VERSION: 8.0.x
+  IMAGE_NAME: marciocardozodev/processador-diagramas-processingservice
+  APP_NAME: processador-diagramas-processingservice
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'processador-diagramas-shared-eks' }}
 
 jobs:
-  quality:
+  build-test-deploy:
+    name: Build, Test & Deploy
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Restore
-        run: dotnet restore ProcessadorDiagramas.ProcessingService.sln
-
-      - name: Build
-        run: dotnet build ProcessadorDiagramas.ProcessingService.sln --no-restore -c Release
-
-      - name: Test
-        run: dotnet test ProcessadorDiagramas.ProcessingService.sln --no-build -c Release
-
-      - name: Dependency vulnerabilities
-        run: dotnet list ProcessadorDiagramas.ProcessingService.sln package --vulnerable --include-transitive
-
-  sast:
-    runs-on: ubuntu-latest
-    needs: quality
-    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
         with:
-          languages: csharp
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      - name: Restore solution
+        run: dotnet restore ProcessadorDiagramas.ProcessingService.sln --verbosity minimal
 
-      - name: Analyze
-        uses: github/codeql-action/analyze@v3
+      - name: Build solution
+        run: dotnet build ProcessadorDiagramas.ProcessingService.sln --no-restore --configuration Release --verbosity minimal
 
-  build_image:
-    runs-on: ubuntu-latest
-    needs: [quality]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    outputs:
-      image_uri: ${{ steps.image.outputs.image_uri }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Run tests
+        run: dotnet test ProcessadorDiagramas.ProcessingService.sln --no-build --configuration Release --verbosity minimal --logger "console;verbosity=minimal"
 
-      - name: Configure AWS credentials (Secrets)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION }}
+      - name: Build Docker image
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} -f Dockerfile .
 
-      - name: Login ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Login no Docker Hub
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Ensure ECR repository
+      - name: Push Docker image
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        run: |
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:${{ github.ref_name }}-latest
+          docker push ${{ env.IMAGE_NAME }}:${{ github.ref_name }}-latest
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}"         >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> "$GITHUB_ENV"
+          echo "AWS_SESSION_TOKEN=${{ secrets.AWS_SESSION_TOKEN }}"          >> "$GITHUB_ENV"
+          echo "AWS_DEFAULT_REGION=${{ env.AWS_REGION }}"                    >> "$GITHUB_ENV"
+
+      - name: Setup kubectl
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        uses: azure/setup-kubectl@v4
+
+      - name: Check EKS cluster availability
+        id: check-eks
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        run: |
+          set +e
+          aws eks describe-cluster --region "${{ env.AWS_REGION }}" --name "${{ env.EKS_CLUSTER_NAME }}" >/tmp/eks-describe.out 2>&1
+          RC=$?
+          set -e
+
+          if [ "$RC" -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "[INFO] Cluster EKS encontrado: ${{ env.EKS_CLUSTER_NAME }}"
+            exit 0
+          fi
+
+          if grep -q "ResourceNotFoundException" /tmp/eks-describe.out; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Cluster EKS '${{ env.EKS_CLUSTER_NAME }}' nao encontrado. Etapas de Kubernetes serao ignoradas nesta execucao."
+            exit 0
+          fi
+
+          echo "[ERROR] Falha ao consultar cluster EKS '${{ env.EKS_CLUSTER_NAME }}'."
+          cat /tmp/eks-describe.out
+          exit "$RC"
+
+      - name: Resolve default connection string
+        id: resolve-db
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
         env:
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          DB_CONNECTION_SSM_ARN: ${{ github.ref_name == 'master' && vars.PROD_DB_CONNECTION_SSM_ARN || vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
+          FALLBACK_CONNECTION: ${{ secrets.CONNECTIONSTRINGS__DEFAULTCONNECTION }}
         run: |
-          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
-          aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
+          CONNECTION_STRING="$FALLBACK_CONNECTION"
 
-      - name: Build and push image
-        id: image
+          if [ -n "$DB_CONNECTION_SSM_ARN" ]; then
+            RESOLVED_FROM_SSM=$(aws ssm get-parameter --name "$DB_CONNECTION_SSM_ARN" --with-decryption --query 'Parameter.Value' --output text 2>/tmp/ssm.err || true)
+            if [ -n "$RESOLVED_FROM_SSM" ]; then
+              CONNECTION_STRING="$RESOLVED_FROM_SSM"
+              echo "[INFO] Connection string resolvida via SSM."
+            else
+              echo "::warning::Nao foi possivel resolver DB via SSM. Usando fallback CONNECTIONSTRINGS__DEFAULTCONNECTION."
+              cat /tmp/ssm.err || true
+            fi
+          else
+            echo "::warning::DB_CONNECTION_SSM_ARN nao definida. Usando fallback CONNECTIONSTRINGS__DEFAULTCONNECTION."
+          fi
+
+          if [ -z "$CONNECTION_STRING" ]; then
+            echo "[ERROR] Nenhuma connection string disponivel (SSM e fallback vazios)."
+            exit 1
+          fi
+
+          {
+            echo "connection_string<<EOF"
+            echo "$CONNECTION_STRING"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate kubeconfig
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
+        run: aws eks update-kubeconfig --region "${{ env.AWS_REGION }}" --name "${{ env.EKS_CLUSTER_NAME }}"
+
+      - name: Ensure namespace
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
         env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          docker build -f Dockerfile.lambda -t "$IMAGE_URI" .
-          docker push "$IMAGE_URI"
-          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          K8S_NAMESPACE: ${{ github.ref_name == 'master' && 'production' || 'homolog' }}
+        run: kubectl create namespace "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Trivy image scan (fail on critical)
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          image-ref: ${{ steps.image.outputs.image_uri }}
-          format: 'table'
-          severity: 'CRITICAL,HIGH'
-          ignore-unfixed: true
-          exit-code: '1'
-
-  provision_homolog:
-    runs-on: ubuntu-latest
-    needs: [build_image]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    outputs:
-      input_bucket: ${{ steps.tf_outputs.outputs.input_bucket }}
-      input_prefix: ${{ steps.tf_outputs.outputs.input_prefix }}
-      input_queue_url: ${{ steps.tf_outputs.outputs.input_queue_url }}
-      output_queue_url: ${{ steps.tf_outputs.outputs.output_queue_url }}
-      worker_log_group: ${{ steps.tf_outputs.outputs.worker_log_group }}
-      lambda_function_name: ${{ steps.tf_outputs.outputs.lambda_function_name }}
-      tf_name_prefix: ${{ steps.naming.outputs.tf_name_prefix }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Configure AWS credentials (Secrets)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Define ephemeral name prefix
-        id: naming
-        run: |
-          echo "tf_name_prefix=proc-diagramas-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
-
-      - name: Terraform init/apply
-        working-directory: infra/terraform/serverless-homolog
+      - name: Ensure application configmap
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
         env:
-          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-          TF_VAR_environment: homolog
-          TF_VAR_name_prefix: ${{ steps.naming.outputs.tf_name_prefix }}
-          TF_VAR_subnet_ids: ${{ vars.HOMOLOG_SUBNET_IDS_JSON }}
-          TF_VAR_security_group_ids: ${{ vars.HOMOLOG_SECURITY_GROUP_IDS_JSON }}
-          TF_VAR_image_uri: ${{ needs.build_image.outputs.image_uri }}
-          TF_VAR_db_connection_ssm_parameter_arn: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
-          TF_VAR_ai_api_key_secret_arn: ${{ vars.AI_API_KEY_SECRET_ARN }}
-          TF_VAR_ai_provider_base_url: ${{ vars.AI_PROVIDER_BASE_URL }}
-          TF_VAR_ai_provider_model: ${{ vars.AI_PROVIDER_MODEL }}
-          TF_VAR_ai_provider_temperature: ${{ vars.AI_PROVIDER_TEMPERATURE }}
-          TF_VAR_ai_provider_max_tokens: ${{ vars.AI_PROVIDER_MAX_TOKENS }}
-          TF_VAR_ai_provider_max_input_characters: ${{ vars.AI_PROVIDER_MAX_INPUT_CHARACTERS }}
-          TF_VAR_ai_provider_timeout_seconds: ${{ vars.AI_PROVIDER_TIMEOUT_SECONDS }}
-          TF_VAR_alarm_actions: ${{ vars.ALARM_ACTIONS_JSON }}
+          K8S_NAMESPACE: ${{ github.ref_name == 'master' && 'production' || 'homolog' }}
         run: |
-          terraform init
-          terraform apply -auto-approve
+          kubectl create configmap ${{ env.APP_NAME }}-config \
+            --from-literal=ASPNETCORE_ENVIRONMENT="Production" \
+            --from-literal=ASPNETCORE_URLS="http://+:8080" \
+            --from-literal=EnableAwsServices="true" \
+            --from-literal=Aws__Region="${{ env.AWS_REGION }}" \
+            --from-literal=DiagramSourceStorage__Provider="S3" \
+            --from-literal=AiProvider__Enabled="true" \
+            --from-literal=AiProvider__Provider="OpenAICompatible" \
+            --from-literal=AiProvider__Model="${{ vars.AI_PROVIDER_MODEL || 'gpt-4o-mini' }}" \
+            --from-literal=AiProvider__Temperature="${{ vars.AI_PROVIDER_TEMPERATURE || '0.2' }}" \
+            --from-literal=AiProvider__MaxTokens="${{ vars.AI_PROVIDER_MAX_TOKENS || '500' }}" \
+            --from-literal=AiProvider__MaxInputCharacters="${{ vars.AI_PROVIDER_MAX_INPUT_CHARACTERS || '12000' }}" \
+            --from-literal=AiProvider__TimeoutSeconds="${{ vars.AI_PROVIDER_TIMEOUT_SECONDS || '60' }}" \
+            -n "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Capture terraform outputs
-        id: tf_outputs
-        working-directory: infra/terraform/serverless-homolog
-        run: |
-          echo "input_bucket=$(terraform output -raw input_bucket_name)" >> "$GITHUB_OUTPUT"
-          echo "input_prefix=$(terraform output -raw input_key_prefix)" >> "$GITHUB_OUTPUT"
-          echo "input_queue_url=$(terraform output -raw input_queue_url)" >> "$GITHUB_OUTPUT"
-          echo "output_queue_url=$(terraform output -raw output_queue_url)" >> "$GITHUB_OUTPUT"
-          echo "worker_log_group=$(terraform output -raw worker_log_group)" >> "$GITHUB_OUTPUT"
-          echo "lambda_function_name=$(terraform output -raw lambda_function_name)" >> "$GITHUB_OUTPUT"
-
-      - name: Run DB migrations
+      - name: Ensure application secrets
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
         env:
-          DB_CONNECTION_SSM_ARN: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
+          K8S_NAMESPACE: ${{ github.ref_name == 'master' && 'production' || 'homolog' }}
+          DEFAULT_CONNECTION: ${{ steps.resolve-db.outputs.connection_string }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_TOPIC_ARN: ${{ secrets.AWS__TOPICARN }}
+          AWS_QUEUE_URL: ${{ secrets.AWS__QUEUEURL }}
+          DIAGRAM_SOURCE_BUCKET: ${{ vars.DIAGRAM_SOURCE_BUCKET_NAME }}
+          DIAGRAM_SOURCE_PREFIX: ${{ vars.DIAGRAM_SOURCE_KEY_PREFIX || 'inputs/' }}
+          AI_PROVIDER_BASE_URL: ${{ vars.AI_PROVIDER_BASE_URL || 'https://api.openai.com/' }}
+          AI_PROVIDER_API_KEY: ${{ secrets.AI_PROVIDER_API_KEY }}
         run: |
-          export ConnectionStrings__DefaultConnection="$(aws ssm get-parameter --name "$DB_CONNECTION_SSM_ARN" --with-decryption --query 'Parameter.Value' --output text)"
-          dotnet tool install --global dotnet-ef --version 8.0.0
-          export PATH="$PATH:$HOME/.dotnet/tools"
-          dotnet restore ProcessadorDiagramas.ProcessingService.sln
-          dotnet ef database update \
-            --project src/ProcessadorDiagramas.ProcessingService.Infrastructure/ProcessadorDiagramas.ProcessingService.Infrastructure.csproj \
-            --startup-project src/ProcessadorDiagramas.ProcessingService.API/ProcessadorDiagramas.ProcessingService.API.csproj
+          kubectl create secret generic ${{ env.APP_NAME }}-secrets \
+            --from-literal=ConnectionStrings__DefaultConnection="$DEFAULT_CONNECTION" \
+            --from-literal=Aws__Region="$AWS_REGION" \
+            --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+            --from-literal=AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
+            --from-literal=Aws__TopicArn="$AWS_TOPIC_ARN" \
+            --from-literal=Aws__QueueUrl="$AWS_QUEUE_URL" \
+            --from-literal=DiagramSourceStorage__BucketName="$DIAGRAM_SOURCE_BUCKET" \
+            --from-literal=DiagramSourceStorage__KeyPrefix="$DIAGRAM_SOURCE_PREFIX" \
+            --from-literal=AiProvider__BaseUrl="$AI_PROVIDER_BASE_URL" \
+            --from-literal=AiProvider__ApiKey="$AI_PROVIDER_API_KEY" \
+            -n "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Persist terraform state
-        uses: actions/upload-artifact@v4
-        with:
-          name: tf-state
-          path: infra/terraform/serverless-homolog
-          retention-days: 2
-
-  e2e_serverless:
-    runs-on: ubuntu-latest
-    needs: [provision_homolog]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-    environment: homolog
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials (Secrets)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Install dependencies for E2E
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client jq
-          chmod +x scripts/aws/run-serverless-e2e.sh
-
-      - name: Run serverless E2E
+      - name: Run database migrations
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
         env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          INPUT_BUCKET: ${{ needs.provision_homolog.outputs.input_bucket }}
-          INPUT_PREFIX: ${{ needs.provision_homolog.outputs.input_prefix }}
-          INPUT_QUEUE_URL: ${{ needs.provision_homolog.outputs.input_queue_url }}
-          OUTPUT_QUEUE_URL: ${{ needs.provision_homolog.outputs.output_queue_url }}
-          WORKER_LOG_GROUP: ${{ needs.provision_homolog.outputs.worker_log_group }}
-          LAMBDA_FUNCTION_NAME: ${{ needs.provision_homolog.outputs.lambda_function_name }}
-          DB_CONNECTION_SSM_ARN: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
-          ARTIFACT_DIR: artifacts/e2e-serverless
-          E2E_TIMEOUT_SECONDS: '300'
-          E2E_MAX_LATENCY_SECONDS: '180'
+          K8S_NAMESPACE: ${{ github.ref_name == 'master' && 'production' || 'homolog' }}
         run: |
-          export PSQL_CONNECTION_STRING="$(aws ssm get-parameter --name "$DB_CONNECTION_SSM_ARN" --with-decryption --query 'Parameter.Value' --output text)"
-          scripts/aws/run-serverless-e2e.sh
+          kubectl -n "$K8S_NAMESPACE" delete job ${{ env.APP_NAME }}-migrations --ignore-not-found=true
+          sed "s|\${IMAGE_TAG}|${{ github.sha }}|g" deploy/k8s/create-db-job.yaml | kubectl -n "$K8S_NAMESPACE" apply -f -
+          kubectl wait --for=condition=complete --timeout=300s job/${{ env.APP_NAME }}-migrations -n "$K8S_NAMESPACE" || {
+            kubectl describe job/${{ env.APP_NAME }}-migrations -n "$K8S_NAMESPACE" || true
+            POD=$(kubectl get pods -n "$K8S_NAMESPACE" -l job-name=${{ env.APP_NAME }}-migrations -o jsonpath='{.items[0].metadata.name}')
+            kubectl logs "$POD" -n "$K8S_NAMESPACE" || true
+            exit 1
+          }
 
-      - name: Upload E2E evidences
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-serverless-evidence
-          path: artifacts/e2e-serverless
-          retention-days: 15
-
-  teardown_homolog:
-    runs-on: ubuntu-latest
-    needs: [build_image, provision_homolog, e2e_serverless]
-    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download terraform state
-        uses: actions/download-artifact@v4
-        with:
-          name: tf-state
-          path: infra/terraform/serverless-homolog
-
-      - name: Configure AWS credentials (Secrets)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Terraform destroy
-        working-directory: infra/terraform/serverless-homolog
+      - name: Deploy to Kubernetes
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
         env:
-          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
-          TF_VAR_environment: homolog
-          TF_VAR_name_prefix: ${{ needs.provision_homolog.outputs.tf_name_prefix }}
-          TF_VAR_subnet_ids: ${{ vars.HOMOLOG_SUBNET_IDS_JSON }}
-          TF_VAR_security_group_ids: ${{ vars.HOMOLOG_SECURITY_GROUP_IDS_JSON }}
-          TF_VAR_image_uri: ${{ needs.build_image.outputs.image_uri }}
-          TF_VAR_db_connection_ssm_parameter_arn: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
-          TF_VAR_ai_api_key_secret_arn: ${{ vars.AI_API_KEY_SECRET_ARN }}
-          TF_VAR_ai_provider_base_url: ${{ vars.AI_PROVIDER_BASE_URL }}
-          TF_VAR_ai_provider_model: ${{ vars.AI_PROVIDER_MODEL }}
-          TF_VAR_ai_provider_temperature: ${{ vars.AI_PROVIDER_TEMPERATURE }}
-          TF_VAR_ai_provider_max_tokens: ${{ vars.AI_PROVIDER_MAX_TOKENS }}
-          TF_VAR_ai_provider_max_input_characters: ${{ vars.AI_PROVIDER_MAX_INPUT_CHARACTERS }}
-          TF_VAR_ai_provider_timeout_seconds: ${{ vars.AI_PROVIDER_TIMEOUT_SECONDS }}
-          TF_VAR_alarm_actions: ${{ vars.ALARM_ACTIONS_JSON }}
+          K8S_NAMESPACE: ${{ github.ref_name == 'master' && 'production' || 'homolog' }}
         run: |
-          terraform init
-          terraform destroy -auto-approve
+          kubectl -n "$K8S_NAMESPACE" apply -f deploy/k8s/service.yaml
+          sed "s|\${IMAGE_TAG}|${{ github.sha }}|g" deploy/k8s/deployment.yaml | kubectl -n "$K8S_NAMESPACE" apply -f -
+          kubectl rollout status deployment/${{ env.APP_NAME }} -n "$K8S_NAMESPACE" --timeout=10m
+
+      - name: Smoke test API in EKS
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master') && steps.check-eks.outputs.exists == 'true'
+        env:
+          K8S_NAMESPACE: ${{ github.ref_name == 'master' && 'production' || 'homolog' }}
+        run: |
+          kubectl -n "$K8S_NAMESPACE" port-forward svc/${{ env.APP_NAME }} 18080:80 >/tmp/pf.log 2>&1 &
+          PF_PID=$!
+          trap 'kill $PF_PID >/dev/null 2>&1 || true' EXIT
+
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18080/health >/tmp/health.out; then
+              break
+            fi
+            sleep 3
+          done
+
+          test -s /tmp/health.out
+          grep -Eqi "healthy|ok" /tmp/health.out
+          curl -fsS http://127.0.0.1:18080/ >/tmp/root.out
