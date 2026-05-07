@@ -1,4 +1,5 @@
 using Amazon.Runtime;
+using Amazon.S3;
 using Amazon.SimpleNotificationService;
 using Amazon.SimpleNotificationService.Model;
 using Amazon.SQS;
@@ -34,8 +35,23 @@ public static class DependencyInjection
         services.AddScoped<IDiagramProcessingJobRepository, DiagramProcessingJobRepository>();
         services.AddScoped<IDiagramProcessingResultRepository, DiagramProcessingResultRepository>();
         services.AddScoped<IDiagramProcessingAttemptRepository, DiagramProcessingAttemptRepository>();
-        services.AddScoped<IDiagramSourceStorage, LocalDiagramSourceStorage>();
         services.AddScoped<IDiagramPreprocessor, DefaultDiagramPreprocessor>();
+
+        var storageSection = configuration.GetSection("DiagramSourceStorage");
+        services.Configure<DiagramSourceStorageSettings>(storageSection);
+
+        var storageSettings = storageSection.Get<DiagramSourceStorageSettings>() ?? new DiagramSourceStorageSettings();
+        var awsSettings = configuration.GetSection("Aws").Get<AwsSettings>() ?? new AwsSettings();
+
+        if (storageSettings.Provider.Equals("S3", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IAmazonS3>(_ => CreateS3Client(awsSettings));
+            services.AddScoped<IDiagramSourceStorage, S3DiagramSourceStorage>();
+        }
+        else
+        {
+            services.AddScoped<IDiagramSourceStorage, LocalDiagramSourceStorage>();
+        }
 
         services.Configure<AiProviderSettings>(configuration.GetSection("AiProvider"));
         services.AddHttpClient<OpenAiCompatibleDiagramAiPipeline>((serviceProvider, httpClient) =>
@@ -67,16 +83,21 @@ public static class DependencyInjection
             var awsSection = configuration.GetSection("Aws");
             services.Configure<AwsSettings>(awsSection);
 
-            var awsSettings = awsSection.Get<AwsSettings>() ?? new AwsSettings();
+            awsSettings = awsSection.Get<AwsSettings>() ?? new AwsSettings();
             services.AddSingleton<IAmazonSimpleNotificationService>(_ => CreateSnsClient(awsSettings));
             services.AddSingleton<IAmazonSQS>(_ => CreateSqsClient(awsSettings));
             services.AddScoped<IMessageBus, AwsMessageBus>();
-            services.AddHostedService<ProcessingInboxConsumer>();
+
+            var enableSqsPolling = configuration.GetValue<bool>("Aws:EnableSqsPolling");
+            if (enableSqsPolling)
+                services.AddHostedService<ProcessingInboxConsumer>();
         }
         else
         {
             services.AddScoped<IMessageBus, DummyMessageBus>();
         }
+
+        services.AddScoped<MessageDispatcher>();
 
         return services;
     }
@@ -113,6 +134,24 @@ public static class DependencyInjection
         }
 
         return new AmazonSQSClient(credentials, Amazon.RegionEndpoint.GetBySystemName(settings.Region));
+    }
+
+    private static IAmazonS3 CreateS3Client(AwsSettings settings)
+    {
+        var credentials = CreateCredentials();
+
+        if (!string.IsNullOrWhiteSpace(settings.ServiceURL))
+        {
+            return new AmazonS3Client(credentials, new AmazonS3Config
+            {
+                ServiceURL = settings.ServiceURL,
+                AuthenticationRegion = settings.Region,
+                ForcePathStyle = true,
+                UseHttp = settings.ServiceURL.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            });
+        }
+
+        return new AmazonS3Client(credentials, Amazon.RegionEndpoint.GetBySystemName(settings.Region));
     }
 
     private static BasicAWSCredentials CreateCredentials()

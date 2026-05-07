@@ -1,0 +1,28 @@
+# Build stage — igual ao Dockerfile principal, sem o efbundle
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+COPY ProcessadorDiagramas.ProcessingService.sln ./
+COPY src/ProcessadorDiagramas.ProcessingService.API/ProcessadorDiagramas.ProcessingService.API.csproj src/ProcessadorDiagramas.ProcessingService.API/
+COPY src/ProcessadorDiagramas.ProcessingService.Application/ProcessadorDiagramas.ProcessingService.Application.csproj src/ProcessadorDiagramas.ProcessingService.Application/
+COPY src/ProcessadorDiagramas.ProcessingService.Domain/ProcessadorDiagramas.ProcessingService.Domain.csproj src/ProcessadorDiagramas.ProcessingService.Domain/
+COPY src/ProcessadorDiagramas.ProcessingService.Infrastructure/ProcessadorDiagramas.ProcessingService.Infrastructure.csproj src/ProcessadorDiagramas.ProcessingService.Infrastructure/
+COPY tests/ProcessadorDiagramas.ProcessingService.Tests/ProcessadorDiagramas.ProcessingService.Tests.csproj tests/ProcessadorDiagramas.ProcessingService.Tests/
+
+RUN dotnet restore ProcessadorDiagramas.ProcessingService.sln --verbosity minimal
+
+COPY . .
+
+RUN dotnet publish src/ProcessadorDiagramas.ProcessingService.API/ProcessadorDiagramas.ProcessingService.API.csproj \
+    -c Release \
+    -o /app/publish \
+    --no-restore
+
+# Runtime stage — usa Lambda Runtime Interface Client via Amazon.Lambda.RuntimeSupport
+# O Program.cs detecta AWS_LAMBDA_RUNTIME_API e entra no modo Lambda automaticamente.
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+WORKDIR /app
+
+COPY --from=build /app/publish .
+
+ENTRYPOINT ["dotnet", "ProcessadorDiagramas.ProcessingService.API.dll"]

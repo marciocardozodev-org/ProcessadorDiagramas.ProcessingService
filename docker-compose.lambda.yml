@@ -1,0 +1,111 @@
+services:
+  lambda:
+    build:
+      context: .
+      dockerfile: Dockerfile.lambda
+    container_name: processador_diagramas_lambda
+    # O aws-lambda-rie é montado do host (baixado pelo script de teste).
+    # Ele emula o runtime API, seta AWS_LAMBDA_RUNTIME_API internamente e
+    # expõe a porta 8080 para invocações externas via HTTP.
+    entrypoint:
+      - /aws-lambda-rie
+      - dotnet
+      - ProcessadorDiagramas.ProcessingService.API.dll
+    ports:
+      - "9000:8080"
+    volumes:
+      - ${RIE_PATH:-~/.aws-lambda-rie/aws-lambda-rie}:/aws-lambda-rie:ro
+    environment:
+      # AWS fake credentials para LocalStack
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      # Configuração da aplicação
+      - ASPNETCORE_ENVIRONMENT=Development
+      - EnableAwsServices=true
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=processador_diagramas_processing;Username=postgres;Password=postgres
+      - Aws__Region=us-east-1
+      - Aws__ServiceURL=http://localstack:4566
+      - Aws__TopicArn=arn:aws:sns:us-east-1:000000000000:lambda-processing-events
+      # QueueUrl não é usado no modo Lambda (sem SQS poller), mas evita null em settings
+      - Aws__QueueUrl=http://localstack:4566/000000000000/lambda-input
+      - Aws__EnableSqsPolling=false
+      - Aws__OperationRetryMaxAttempts=3
+      - Aws__RetryBaseDelayMilliseconds=250
+      - Aws__RetryMaxDelaySeconds=15
+      - DiagramSourceStorage__Provider=S3
+      - DiagramSourceStorage__BucketName=lambda-input-diagrams
+      - DiagramSourceStorage__KeyPrefix=input-diagrams
+      - AiProvider__Enabled=${AIPROVIDER__ENABLED:-false}
+      - AiProvider__Provider=${AIPROVIDER__PROVIDER:-OpenAICompatible}
+      - AiProvider__BaseUrl=${AIPROVIDER__BASEURL:-https://api.openai.com/}
+      - AiProvider__ApiKey=${AIPROVIDER__APIKEY:-dummy}
+      - AiProvider__Model=${AIPROVIDER__MODEL:-gpt-4o-mini}
+      - AiProvider__Temperature=${AIPROVIDER__TEMPERATURE:-0.2}
+      - AiProvider__MaxTokens=${AIPROVIDER__MAXTOKENS:-500}
+      - AiProvider__MaxInputCharacters=${AIPROVIDER__MAXINPUTCHARACTERS:-12000}
+      - AiProvider__TimeoutSeconds=${AIPROVIDER__TIMEOUTSECONDS:-60}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: processador_diagramas_lambda_migrate
+    entrypoint:
+      - /bin/sh
+      - -c
+      - /app/efbundle --connection "$$ConnectionStrings__DefaultConnection"
+    environment:
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=processador_diagramas_processing;Username=postgres;Password=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: processador_diagramas_lambda_postgres
+    environment:
+      POSTGRES_DB: processador_diagramas_processing
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres_lambda_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:3
+    container_name: processador_diagramas_lambda_localstack
+    ports:
+      - "4567:4566"
+    environment:
+      - SERVICES=sns,sqs,s3
+      - DEFAULT_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    volumes:
+      - ./scripts/localstack/init-aws-lambda.sh:/etc/localstack/init/ready.d/init-aws-lambda.sh:ro
+      - localstack_lambda_data:/var/lib/localstack
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://localhost:4566/_localstack/health >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_lambda_data:
+  localstack_lambda_data:
