@@ -46,6 +46,28 @@ jobs:
       - name: Run tests
         run: dotnet test ProcessadorDiagramas.ProcessingService.sln --no-build --configuration Release --verbosity minimal --logger "console;verbosity=minimal"
 
+      - name: Validate required secrets
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+        run: |
+          MISSING=""
+          [ -z "$DOCKERHUB_USERNAME" ] && MISSING="$MISSING DOCKERHUB_USERNAME"
+          [ -z "$DOCKERHUB_TOKEN" ] && MISSING="$MISSING DOCKERHUB_TOKEN"
+          [ -z "$AWS_ACCESS_KEY_ID" ] && MISSING="$MISSING AWS_ACCESS_KEY_ID"
+          [ -z "$AWS_SECRET_ACCESS_KEY" ] && MISSING="$MISSING AWS_SECRET_ACCESS_KEY"
+          [ -z "$AWS_SESSION_TOKEN" ] && MISSING="$MISSING AWS_SESSION_TOKEN"
+
+          if [ -n "$MISSING" ]; then
+            echo "[ERROR] Secrets obrigatórios ausentes:$MISSING"
+            echo "[INFO] Configure os secrets em Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
       - name: Build Docker image
         if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} -f Dockerfile .
