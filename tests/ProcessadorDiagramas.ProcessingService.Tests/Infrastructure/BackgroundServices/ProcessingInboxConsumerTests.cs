@@ -7,6 +7,7 @@ using ProcessadorDiagramas.ProcessingService.Application.Contracts.Events;
 using ProcessadorDiagramas.ProcessingService.Application.EventHandlers;
 using ProcessadorDiagramas.ProcessingService.Application.Interfaces;
 using ProcessadorDiagramas.ProcessingService.Infrastructure.BackgroundServices;
+using ProcessadorDiagramas.ProcessingService.Infrastructure.Messaging;
 
 namespace ProcessadorDiagramas.ProcessingService.Tests.Infrastructure.BackgroundServices;
 
@@ -25,6 +26,7 @@ public sealed class ProcessingInboxConsumerTests
         services.AddLogging();
         services.AddSingleton<IMessageBus>(messageBus);
         services.AddSingleton<IEventHandler>(spyHandler);
+        services.AddScoped<MessageDispatcher>();
         services.AddSingleton<IHostedService, ProcessingInboxConsumer>();
 
         await using var provider = services.BuildServiceProvider();

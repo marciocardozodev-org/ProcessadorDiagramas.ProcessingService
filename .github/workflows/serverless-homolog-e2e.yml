@@ -1,0 +1,289 @@
+name: serverless-homolog-e2e
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore ProcessadorDiagramas.ProcessingService.sln
+
+      - name: Build
+        run: dotnet build ProcessadorDiagramas.ProcessingService.sln --no-restore -c Release
+
+      - name: Test
+        run: dotnet test ProcessadorDiagramas.ProcessingService.sln --no-build -c Release
+
+      - name: Dependency vulnerabilities
+        run: dotnet list ProcessadorDiagramas.ProcessingService.sln package --vulnerable --include-transitive
+
+  sast:
+    runs-on: ubuntu-latest
+    needs: quality
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+
+  build_image:
+    runs-on: ubuntu-latest
+    needs: [quality]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    outputs:
+      image_uri: ${{ steps.image.outputs.image_uri }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (Secrets)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repository
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1 || \
+          aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
+
+      - name: Build and push image
+        id: image
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker build -f Dockerfile.lambda -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy image scan (fail on critical)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ steps.image.outputs.image_uri }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+  provision_homolog:
+    runs-on: ubuntu-latest
+    needs: [build_image]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    outputs:
+      input_bucket: ${{ steps.tf_outputs.outputs.input_bucket }}
+      input_prefix: ${{ steps.tf_outputs.outputs.input_prefix }}
+      input_queue_url: ${{ steps.tf_outputs.outputs.input_queue_url }}
+      output_queue_url: ${{ steps.tf_outputs.outputs.output_queue_url }}
+      worker_log_group: ${{ steps.tf_outputs.outputs.worker_log_group }}
+      lambda_function_name: ${{ steps.tf_outputs.outputs.lambda_function_name }}
+      tf_name_prefix: ${{ steps.naming.outputs.tf_name_prefix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Configure AWS credentials (Secrets)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Define ephemeral name prefix
+        id: naming
+        run: |
+          echo "tf_name_prefix=proc-diagramas-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform init/apply
+        working-directory: infra/terraform/serverless-homolog
+        env:
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_environment: homolog
+          TF_VAR_name_prefix: ${{ steps.naming.outputs.tf_name_prefix }}
+          TF_VAR_subnet_ids: ${{ vars.HOMOLOG_SUBNET_IDS_JSON }}
+          TF_VAR_security_group_ids: ${{ vars.HOMOLOG_SECURITY_GROUP_IDS_JSON }}
+          TF_VAR_image_uri: ${{ needs.build_image.outputs.image_uri }}
+          TF_VAR_db_connection_ssm_parameter_arn: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
+          TF_VAR_ai_api_key_secret_arn: ${{ vars.AI_API_KEY_SECRET_ARN }}
+          TF_VAR_ai_provider_base_url: ${{ vars.AI_PROVIDER_BASE_URL }}
+          TF_VAR_ai_provider_model: ${{ vars.AI_PROVIDER_MODEL }}
+          TF_VAR_ai_provider_temperature: ${{ vars.AI_PROVIDER_TEMPERATURE }}
+          TF_VAR_ai_provider_max_tokens: ${{ vars.AI_PROVIDER_MAX_TOKENS }}
+          TF_VAR_ai_provider_max_input_characters: ${{ vars.AI_PROVIDER_MAX_INPUT_CHARACTERS }}
+          TF_VAR_ai_provider_timeout_seconds: ${{ vars.AI_PROVIDER_TIMEOUT_SECONDS }}
+          TF_VAR_alarm_actions: ${{ vars.ALARM_ACTIONS_JSON }}
+        run: |
+          terraform init
+          terraform apply -auto-approve
+
+      - name: Capture terraform outputs
+        id: tf_outputs
+        working-directory: infra/terraform/serverless-homolog
+        run: |
+          echo "input_bucket=$(terraform output -raw input_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "input_prefix=$(terraform output -raw input_key_prefix)" >> "$GITHUB_OUTPUT"
+          echo "input_queue_url=$(terraform output -raw input_queue_url)" >> "$GITHUB_OUTPUT"
+          echo "output_queue_url=$(terraform output -raw output_queue_url)" >> "$GITHUB_OUTPUT"
+          echo "worker_log_group=$(terraform output -raw worker_log_group)" >> "$GITHUB_OUTPUT"
+          echo "lambda_function_name=$(terraform output -raw lambda_function_name)" >> "$GITHUB_OUTPUT"
+
+      - name: Run DB migrations
+        env:
+          DB_CONNECTION_SSM_ARN: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
+        run: |
+          export ConnectionStrings__DefaultConnection="$(aws ssm get-parameter --name "$DB_CONNECTION_SSM_ARN" --with-decryption --query 'Parameter.Value' --output text)"
+          dotnet tool install --global dotnet-ef --version 8.0.0
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet restore ProcessadorDiagramas.ProcessingService.sln
+          dotnet ef database update \
+            --project src/ProcessadorDiagramas.ProcessingService.Infrastructure/ProcessadorDiagramas.ProcessingService.Infrastructure.csproj \
+            --startup-project src/ProcessadorDiagramas.ProcessingService.API/ProcessadorDiagramas.ProcessingService.API.csproj
+
+      - name: Persist terraform state
+        uses: actions/upload-artifact@v4
+        with:
+          name: tf-state
+          path: infra/terraform/serverless-homolog
+          retention-days: 2
+
+  e2e_serverless:
+    runs-on: ubuntu-latest
+    needs: [provision_homolog]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    environment: homolog
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (Secrets)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Install dependencies for E2E
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client jq
+          chmod +x scripts/aws/run-serverless-e2e.sh
+
+      - name: Run serverless E2E
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          INPUT_BUCKET: ${{ needs.provision_homolog.outputs.input_bucket }}
+          INPUT_PREFIX: ${{ needs.provision_homolog.outputs.input_prefix }}
+          INPUT_QUEUE_URL: ${{ needs.provision_homolog.outputs.input_queue_url }}
+          OUTPUT_QUEUE_URL: ${{ needs.provision_homolog.outputs.output_queue_url }}
+          WORKER_LOG_GROUP: ${{ needs.provision_homolog.outputs.worker_log_group }}
+          LAMBDA_FUNCTION_NAME: ${{ needs.provision_homolog.outputs.lambda_function_name }}
+          DB_CONNECTION_SSM_ARN: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
+          ARTIFACT_DIR: artifacts/e2e-serverless
+          E2E_TIMEOUT_SECONDS: '300'
+          E2E_MAX_LATENCY_SECONDS: '180'
+        run: |
+          export PSQL_CONNECTION_STRING="$(aws ssm get-parameter --name "$DB_CONNECTION_SSM_ARN" --with-decryption --query 'Parameter.Value' --output text)"
+          scripts/aws/run-serverless-e2e.sh
+
+      - name: Upload E2E evidences
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-serverless-evidence
+          path: artifacts/e2e-serverless
+          retention-days: 15
+
+  teardown_homolog:
+    runs-on: ubuntu-latest
+    needs: [build_image, provision_homolog, e2e_serverless]
+    if: always() && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download terraform state
+        uses: actions/download-artifact@v4
+        with:
+          name: tf-state
+          path: infra/terraform/serverless-homolog
+
+      - name: Configure AWS credentials (Secrets)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform destroy
+        working-directory: infra/terraform/serverless-homolog
+        env:
+          TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+          TF_VAR_environment: homolog
+          TF_VAR_name_prefix: ${{ needs.provision_homolog.outputs.tf_name_prefix }}
+          TF_VAR_subnet_ids: ${{ vars.HOMOLOG_SUBNET_IDS_JSON }}
+          TF_VAR_security_group_ids: ${{ vars.HOMOLOG_SECURITY_GROUP_IDS_JSON }}
+          TF_VAR_image_uri: ${{ needs.build_image.outputs.image_uri }}
+          TF_VAR_db_connection_ssm_parameter_arn: ${{ vars.HOMOLOG_DB_CONNECTION_SSM_ARN }}
+          TF_VAR_ai_api_key_secret_arn: ${{ vars.AI_API_KEY_SECRET_ARN }}
+          TF_VAR_ai_provider_base_url: ${{ vars.AI_PROVIDER_BASE_URL }}
+          TF_VAR_ai_provider_model: ${{ vars.AI_PROVIDER_MODEL }}
+          TF_VAR_ai_provider_temperature: ${{ vars.AI_PROVIDER_TEMPERATURE }}
+          TF_VAR_ai_provider_max_tokens: ${{ vars.AI_PROVIDER_MAX_TOKENS }}
+          TF_VAR_ai_provider_max_input_characters: ${{ vars.AI_PROVIDER_MAX_INPUT_CHARACTERS }}
+          TF_VAR_ai_provider_timeout_seconds: ${{ vars.AI_PROVIDER_TIMEOUT_SECONDS }}
+          TF_VAR_alarm_actions: ${{ vars.ALARM_ACTIONS_JSON }}
+        run: |
+          terraform init
+          terraform destroy -auto-approve

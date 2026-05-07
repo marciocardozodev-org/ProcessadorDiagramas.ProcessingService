@@ -94,6 +94,37 @@ export AiProvider__ApiKey=seu-token
 export AiProvider__Model=gpt-4o-mini
 ```
 
+### IA real em modo low-cost
+
+Sugestão de baseline econômico para começar com custo controlado:
+
+```bash
+export AIPROVIDER__ENABLED=true
+export AIPROVIDER__PROVIDER=OpenAICompatible
+export AIPROVIDER__BASEURL=https://api.openai.com/
+export AIPROVIDER__APIKEY=seu-token
+export AIPROVIDER__MODEL=gpt-4o-mini
+export AIPROVIDER__TEMPERATURE=0.2
+export AIPROVIDER__MAXTOKENS=500
+export AIPROVIDER__MAXINPUTCHARACTERS=12000
+```
+
+Com Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+Com Minikube:
+
+```bash
+set -a && source scripts/minikube/ai-low-cost.env.example && set +a
+./scripts/minikube/build-local-image.sh
+IMAGE_TAG=local ./scripts/minikube/deploy.sh
+```
+
+Observação: o pipeline OpenAI-compatible agora aplica truncamento configurável da entrada com `AiProvider__MaxInputCharacters`, reduzindo tokens de prompt e custo por chamada. Se `AIPROVIDER__ENABLED=true`, o deploy valida a presença de `AIPROVIDER__APIKEY` antes de aplicar os manifests.
+
 O script sobe Postgres, LocalStack, aplica migrations, publica uma mensagem `AnalysisProcessRequestedEvent` na fila de entrada e valida o evento `AnalysisProcessingCompletedEvent` na fila de saída.
 
 ## Kubernetes

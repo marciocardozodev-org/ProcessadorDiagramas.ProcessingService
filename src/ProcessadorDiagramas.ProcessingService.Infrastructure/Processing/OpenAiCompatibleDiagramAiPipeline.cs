@@ -31,6 +31,17 @@ public sealed class OpenAiCompatibleDiagramAiPipeline : IDiagramAiPipeline
             throw new ArgumentException("Preprocessed content cannot be empty.", nameof(preprocessedContent));
 
         EnsureConfigured();
+        var originalInputLength = preprocessedContent.Length;
+        var effectiveInput = LimitInputForCost(preprocessedContent);
+        var inputWasTruncated = effectiveInput.Length < originalInputLength;
+
+        if (inputWasTruncated)
+        {
+            _logger.LogWarning(
+                "AI input was truncated from {OriginalLength} to {EffectiveLength} characters to control token cost.",
+                originalInputLength,
+                effectiveInput.Length);
+        }
 
         var requestPayload = new
         {
@@ -43,7 +54,7 @@ public sealed class OpenAiCompatibleDiagramAiPipeline : IDiagramAiPipeline
                 new
                 {
                     role = "user",
-                    content = "Analise o payload pré-processado do diagrama e devolva um resumo técnico em português com componentes, integrações, observações e possíveis riscos.\n\n" + preprocessedContent
+                    content = "Analise o payload pré-processado do diagrama e devolva um resumo técnico em português com componentes, integrações, observações e possíveis riscos.\n\n" + effectiveInput
                 }
             }
         };
@@ -72,6 +83,9 @@ public sealed class OpenAiCompatibleDiagramAiPipeline : IDiagramAiPipeline
             Model = _settings.Model,
             Summary = summary,
             ResponseId = responseId,
+            InputWasTruncated = inputWasTruncated,
+            OriginalInputLength = originalInputLength,
+            EffectiveInputLength = effectiveInput.Length,
             GeneratedAt = DateTime.UtcNow,
             RawResponse = responseBody
         });
@@ -94,6 +108,14 @@ public sealed class OpenAiCompatibleDiagramAiPipeline : IDiagramAiPipeline
 
             _httpClient.BaseAddress = baseUri;
         }
+    }
+
+    private string LimitInputForCost(string input)
+    {
+        if (_settings.MaxInputCharacters <= 0 || input.Length <= _settings.MaxInputCharacters)
+            return input;
+
+        return input[.._settings.MaxInputCharacters];
     }
 
     private static string ExtractSummary(string responseBody)
