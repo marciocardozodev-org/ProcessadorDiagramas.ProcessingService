@@ -2,9 +2,9 @@ name: serverless-homolog-e2e
 
 on:
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, develop, homolog, master ]
   push:
-    branches: [ main ]
+    branches: [ main, develop, homolog, master ]
   workflow_dispatch:
 
 permissions:
