@@ -143,10 +143,19 @@ internal static class AwsRuntimeConfigurationBootstrapper
         return new AmazonSecretsManagerClient(credentials, RegionEndpoint.GetBySystemName(region));
     }
 
-    private static BasicAWSCredentials CreateCredentials()
+    private static AWSCredentials CreateCredentials()
     {
-        var accessKey = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID") ?? "test";
-        var secretKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY") ?? "test";
+        var accessKey = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID")
+                     ?? Environment.GetEnvironmentVariable("Aws__AccessKeyId")
+                     ?? "test";
+        var secretKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")
+                     ?? Environment.GetEnvironmentVariable("Aws__SecretAccessKey")
+                     ?? "test";
+        var sessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN")
+                        ?? Environment.GetEnvironmentVariable("Aws__SessionToken");
+
+        if (!string.IsNullOrWhiteSpace(sessionToken))
+            return new SessionAWSCredentials(accessKey, secretKey, sessionToken);
 
         return new BasicAWSCredentials(accessKey, secretKey);
     }
