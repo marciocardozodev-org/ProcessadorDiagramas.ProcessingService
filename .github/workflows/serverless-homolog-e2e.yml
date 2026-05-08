@@ -225,18 +225,28 @@ jobs:
           AI_PROVIDER_BASE_URL: ${{ vars.AI_PROVIDER_BASE_URL || 'https://api.openai.com/' }}
           AI_PROVIDER_API_KEY: ${{ secrets.AI_PROVIDER_API_KEY }}
         run: |
+          AWS_ACCESS_KEY_ID_TRIMMED="$(echo "$AWS_ACCESS_KEY_ID" | xargs)"
+          AWS_SECRET_ACCESS_KEY_TRIMMED="$(echo "$AWS_SECRET_ACCESS_KEY" | xargs)"
+          AWS_SESSION_TOKEN_TRIMMED="$(echo "$AWS_SESSION_TOKEN" | xargs)"
+          AWS_TOPIC_ARN_TRIMMED="$(echo "$AWS_TOPIC_ARN" | xargs)"
+          AWS_QUEUE_URL_TRIMMED="$(echo "$AWS_QUEUE_URL" | xargs)"
+          DIAGRAM_SOURCE_BUCKET_TRIMMED="$(echo "$DIAGRAM_SOURCE_BUCKET" | xargs)"
+          DIAGRAM_SOURCE_PREFIX_TRIMMED="$(echo "$DIAGRAM_SOURCE_PREFIX" | xargs)"
+          AI_PROVIDER_BASE_URL_TRIMMED="$(echo "$AI_PROVIDER_BASE_URL" | xargs)"
+          AI_PROVIDER_API_KEY_TRIMMED="$(echo "$AI_PROVIDER_API_KEY" | xargs)"
+
           kubectl create secret generic ${{ env.APP_NAME }}-secrets \
             --from-literal=ConnectionStrings__DefaultConnection="$DEFAULT_CONNECTION" \
             --from-literal=Aws__Region="$AWS_REGION" \
-            --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
-            --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
-            --from-literal=AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN" \
-            --from-literal=Aws__TopicArn="$AWS_TOPIC_ARN" \
-            --from-literal=Aws__QueueUrl="$AWS_QUEUE_URL" \
-            --from-literal=DiagramSourceStorage__BucketName="$DIAGRAM_SOURCE_BUCKET" \
-            --from-literal=DiagramSourceStorage__KeyPrefix="$DIAGRAM_SOURCE_PREFIX" \
-            --from-literal=AiProvider__BaseUrl="$AI_PROVIDER_BASE_URL" \
-            --from-literal=AiProvider__ApiKey="$AI_PROVIDER_API_KEY" \
+            --from-literal=AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID_TRIMMED" \
+            --from-literal=AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY_TRIMMED" \
+            --from-literal=AWS_SESSION_TOKEN="$AWS_SESSION_TOKEN_TRIMMED" \
+            --from-literal=Aws__TopicArn="$AWS_TOPIC_ARN_TRIMMED" \
+            --from-literal=Aws__QueueUrl="$AWS_QUEUE_URL_TRIMMED" \
+            --from-literal=DiagramSourceStorage__BucketName="$DIAGRAM_SOURCE_BUCKET_TRIMMED" \
+            --from-literal=DiagramSourceStorage__KeyPrefix="$DIAGRAM_SOURCE_PREFIX_TRIMMED" \
+            --from-literal=AiProvider__BaseUrl="$AI_PROVIDER_BASE_URL_TRIMMED" \
+            --from-literal=AiProvider__ApiKey="$AI_PROVIDER_API_KEY_TRIMMED" \
             -n "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Run database migrations
