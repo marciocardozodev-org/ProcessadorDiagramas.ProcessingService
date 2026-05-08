@@ -54,6 +54,9 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+          AWS_TOPIC_ARN: ${{ secrets.AWS__TOPICARN }}
+          AWS_QUEUE_URL: ${{ secrets.AWS__QUEUEURL }}
+          AI_PROVIDER_API_KEY: ${{ secrets.AI_PROVIDER_API_KEY }}
         run: |
           MISSING=""
           [ -z "$DOCKERHUB_USERNAME" ] && MISSING="$MISSING DOCKERHUB_USERNAME"
@@ -61,10 +64,24 @@ jobs:
           [ -z "$AWS_ACCESS_KEY_ID" ] && MISSING="$MISSING AWS_ACCESS_KEY_ID"
           [ -z "$AWS_SECRET_ACCESS_KEY" ] && MISSING="$MISSING AWS_SECRET_ACCESS_KEY"
           [ -z "$AWS_SESSION_TOKEN" ] && MISSING="$MISSING AWS_SESSION_TOKEN"
+          [ -z "$AWS_TOPIC_ARN" ] && MISSING="$MISSING AWS__TOPICARN"
+          [ -z "$AWS_QUEUE_URL" ] && MISSING="$MISSING AWS__QUEUEURL"
+          [ -z "$AI_PROVIDER_API_KEY" ] && MISSING="$MISSING AI_PROVIDER_API_KEY"
 
           if [ -n "$MISSING" ]; then
             echo "[ERROR] Secrets obrigatórios ausentes:$MISSING"
             echo "[INFO] Configure os secrets em Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Validate required vars
+        if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
+        env:
+          DIAGRAM_SOURCE_BUCKET_NAME: ${{ vars.DIAGRAM_SOURCE_BUCKET_NAME }}
+        run: |
+          if [ -z "$DIAGRAM_SOURCE_BUCKET_NAME" ]; then
+            echo "[ERROR] Variável obrigatória ausente: DIAGRAM_SOURCE_BUCKET_NAME"
+            echo "[INFO] Configure a var em Settings > Secrets and variables > Actions."
             exit 1
           fi
 
@@ -181,6 +198,7 @@ jobs:
             --from-literal=ASPNETCORE_URLS="http://+:8080" \
             --from-literal=EnableAwsServices="true" \
             --from-literal=Aws__Region="${{ env.AWS_REGION }}" \
+            --from-literal=Aws__EnableSqsPolling="true" \
             --from-literal=DiagramSourceStorage__Provider="S3" \
             --from-literal=AiProvider__Enabled="true" \
             --from-literal=AiProvider__Provider="OpenAICompatible" \
