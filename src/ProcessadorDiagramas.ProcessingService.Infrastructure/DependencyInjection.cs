@@ -86,7 +86,11 @@ public static class DependencyInjection
             awsSettings = awsSection.Get<AwsSettings>() ?? new AwsSettings();
             services.AddSingleton<IAmazonSimpleNotificationService>(_ => CreateSnsClient(awsSettings));
             services.AddSingleton<IAmazonSQS>(_ => CreateSqsClient(awsSettings));
-            services.AddScoped<IMessageBus, AwsMessageBus>();
+
+            if (!string.IsNullOrWhiteSpace(awsSettings.ServiceURL))
+                services.AddScoped<IMessageBus, LocalStackMessageBus>();
+            else
+                services.AddScoped<IMessageBus, AwsMessageBus>();
 
             var enableSqsPolling = configuration.GetValue<bool>("Aws:EnableSqsPolling");
             if (enableSqsPolling)
@@ -158,12 +162,15 @@ public static class DependencyInjection
     {
         var accessKey = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID")
                      ?? Environment.GetEnvironmentVariable("Aws__AccessKeyId")
-                     ?? "test";
+                     ?? string.Empty;
         var secretKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")
                      ?? Environment.GetEnvironmentVariable("Aws__SecretAccessKey")
-                     ?? "test";
+                     ?? string.Empty;
         var sessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN")
                         ?? Environment.GetEnvironmentVariable("Aws__SessionToken");
+
+        if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
+            return FallbackCredentialsFactory.GetCredentials();
 
         if (!string.IsNullOrWhiteSpace(sessionToken))
             return new SessionAWSCredentials(accessKey, secretKey, sessionToken);
