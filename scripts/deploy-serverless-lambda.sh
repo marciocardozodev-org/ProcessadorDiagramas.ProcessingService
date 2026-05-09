@@ -37,6 +37,29 @@ require_value() {
   fi
 }
 
+run_aws_quiet_checked() {
+  local context="$1"
+  shift
+
+  local err_file
+  err_file="$(mktemp)"
+
+  if ! "$@" >/dev/null 2>"$err_file"; then
+    echo "[ERROR] Falha em: $context"
+    cat "$err_file" >&2
+
+    if grep -Eqi "AccessDenied|iam:PassRole|iam:GetRole|explicitly denies" "$err_file"; then
+      echo "[HINT] O ambiente AWS parece ter IAM restrito para trilha serverless/Lambda."
+      echo "[HINT] Neste repositório, use o deploy Kubernetes (EKS/Minikube) como caminho principal nesse cenário."
+    fi
+
+    rm -f "$err_file"
+    exit 1
+  fi
+
+  rm -f "$err_file"
+}
+
 json_escape() {
   jq -Rn --arg value "$1" '$value'
 }
@@ -96,21 +119,21 @@ ENVIRONMENT_JSON="$(jq -nc \
 
 echo "[INFO] Publicando função Lambda ${AWS_LAMBDA_FUNCTION_NAME}"
 if aws lambda get-function --function-name "$AWS_LAMBDA_FUNCTION_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-  aws lambda update-function-code \
+  run_aws_quiet_checked "lambda update-function-code" aws lambda update-function-code \
     --function-name "$AWS_LAMBDA_FUNCTION_NAME" \
     --image-uri "$ECR_URI:$IMAGE_TAG" \
-    --region "$AWS_REGION" >/dev/null
+    --region "$AWS_REGION"
 
-  aws lambda update-function-configuration \
+  run_aws_quiet_checked "lambda update-function-configuration" aws lambda update-function-configuration \
     --function-name "$AWS_LAMBDA_FUNCTION_NAME" \
     --role "$AWS_LAMBDA_ROLE_ARN" \
     --timeout "$AWS_LAMBDA_TIMEOUT" \
     --memory-size "$AWS_LAMBDA_MEMORY_SIZE" \
     --architectures "$AWS_LAMBDA_ARCHITECTURE" \
     --environment "$ENVIRONMENT_JSON" \
-    --region "$AWS_REGION" >/dev/null
+    --region "$AWS_REGION"
 else
-  aws lambda create-function \
+  run_aws_quiet_checked "lambda create-function" aws lambda create-function \
     --function-name "$AWS_LAMBDA_FUNCTION_NAME" \
     --package-type Image \
     --code ImageUri="$ECR_URI:$IMAGE_TAG" \
@@ -119,18 +142,18 @@ else
     --memory-size "$AWS_LAMBDA_MEMORY_SIZE" \
     --architectures "$AWS_LAMBDA_ARCHITECTURE" \
     --environment "$ENVIRONMENT_JSON" \
-    --region "$AWS_REGION" >/dev/null
+    --region "$AWS_REGION"
 fi
 
 echo "[INFO] Garantindo event source mapping da fila SQS"
 EVENT_SOURCE_MAPPING_UUID="$(aws lambda list-event-source-mappings --function-name "$AWS_LAMBDA_FUNCTION_NAME" --event-source-arn "$QUEUE_ARN" --region "$AWS_REGION" --query 'EventSourceMappings[0].UUID' --output text 2>/dev/null || true)"
 if [[ -z "$EVENT_SOURCE_MAPPING_UUID" || "$EVENT_SOURCE_MAPPING_UUID" == "None" ]]; then
-  aws lambda create-event-source-mapping \
+  run_aws_quiet_checked "lambda create-event-source-mapping" aws lambda create-event-source-mapping \
     --function-name "$AWS_LAMBDA_FUNCTION_NAME" \
     --event-source-arn "$QUEUE_ARN" \
     --batch-size 10 \
     --enabled \
-    --region "$AWS_REGION" >/dev/null
+    --region "$AWS_REGION"
 fi
 
 aws lambda wait function-updated --function-name "$AWS_LAMBDA_FUNCTION_NAME" --region "$AWS_REGION"

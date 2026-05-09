@@ -47,6 +47,19 @@ dotnet test ProcessadorDiagramas.ProcessingService.sln
 dotnet run --project src/ProcessadorDiagramas.ProcessingService.API
 ```
 
+## Modo recomendado em ambiente IAM restrito
+
+Quando a conta AWS possui bloqueios administrativos (por exemplo, `iam:GetRole` e `iam:PassRole` com `explicit deny`), o caminho oficial deste serviço passa a ser Kubernetes (EKS/Minikube), sem depender de Lambda.
+
+Fluxo assíncrono suportado sem Lambda:
+
+- upload do arquivo no S3
+- evento no SNS
+- entrega da mensagem na SQS
+- consumo contínuo pelo worker no Kubernetes
+
+Nesse modo, o serviço continua cumprindo seu papel de processamento ponta a ponta.
+
 ## Banco e migrations
 
 Migration inicial gerada em:
@@ -129,7 +142,9 @@ O script sobe Postgres, LocalStack, aplica migrations, publica uma mensagem `Ana
 
 ### Smoke serverless em AWS
 
-O projeto também possui um caminho serverless real baseado em AWS Lambda, sem depender de alterar policies de SNS/SQS no ambiente.
+O projeto também possui um caminho serverless real baseado em AWS Lambda.
+
+Importante: em contas com IAM restrito (como ambientes de laboratório sem acesso administrativo), esse fluxo pode falhar por falta de permissões como `iam:PassRole`/`iam:GetRole`. Nesses casos, use o deploy Kubernetes como trilha principal.
 
 O smoke test direto em AWS fica em:
 
@@ -197,6 +212,13 @@ Para publicar a aplicação como Lambda container image, use o workflow manual:
 - .github/workflows/serverless-lambda-deploy.yml
 
 Esse fluxo cria/atualiza a imagem no ECR, publica a função Lambda, provisiona uma fila SQS de entrada e configura o event source mapping da fila para a Lambda. O tópico SNS continua sendo usado para os eventos de saída do processamento.
+
+Pré-requisito de IAM para esse deploy:
+
+- permissões de `lambda:CreateFunction`/`lambda:UpdateFunction*`
+- permissão de `iam:PassRole` para a role de execução da Lambda
+
+Sem essas permissões, prefira o caminho Kubernetes neste repositório.
 
 Você precisa informar:
 
