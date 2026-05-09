@@ -86,7 +86,11 @@ public static class DependencyInjection
             awsSettings = awsSection.Get<AwsSettings>() ?? new AwsSettings();
             services.AddSingleton<IAmazonSimpleNotificationService>(_ => CreateSnsClient(awsSettings));
             services.AddSingleton<IAmazonSQS>(_ => CreateSqsClient(awsSettings));
-            services.AddScoped<IMessageBus, AwsMessageBus>();
+
+            if (!string.IsNullOrWhiteSpace(awsSettings.ServiceURL))
+                services.AddScoped<IMessageBus, LocalStackMessageBus>();
+            else
+                services.AddScoped<IMessageBus, AwsMessageBus>();
 
             var enableSqsPolling = configuration.GetValue<bool>("Aws:EnableSqsPolling");
             if (enableSqsPolling)
@@ -104,7 +108,7 @@ public static class DependencyInjection
 
     private static IAmazonSimpleNotificationService CreateSnsClient(AwsSettings settings)
     {
-        var credentials = CreateCredentials();
+        var credentials = CreateCredentials(settings.ServiceURL);
 
         if (!string.IsNullOrWhiteSpace(settings.ServiceURL))
         {
@@ -121,7 +125,7 @@ public static class DependencyInjection
 
     private static IAmazonSQS CreateSqsClient(AwsSettings settings)
     {
-        var credentials = CreateCredentials();
+        var credentials = CreateCredentials(settings.ServiceURL);
 
         if (!string.IsNullOrWhiteSpace(settings.ServiceURL))
         {
@@ -138,7 +142,7 @@ public static class DependencyInjection
 
     private static IAmazonS3 CreateS3Client(AwsSettings settings)
     {
-        var credentials = CreateCredentials();
+        var credentials = CreateCredentials(settings.ServiceURL);
 
         if (!string.IsNullOrWhiteSpace(settings.ServiceURL))
         {
@@ -154,16 +158,26 @@ public static class DependencyInjection
         return new AmazonS3Client(credentials, Amazon.RegionEndpoint.GetBySystemName(settings.Region));
     }
 
-    private static AWSCredentials CreateCredentials()
+    private static AWSCredentials CreateCredentials(string? serviceUrl = null)
     {
         var accessKey = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID")
                      ?? Environment.GetEnvironmentVariable("Aws__AccessKeyId")
-                     ?? "test";
+                     ?? string.Empty;
         var secretKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")
                      ?? Environment.GetEnvironmentVariable("Aws__SecretAccessKey")
-                     ?? "test";
+                     ?? string.Empty;
         var sessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN")
                         ?? Environment.GetEnvironmentVariable("Aws__SessionToken");
+
+        if (!string.IsNullOrWhiteSpace(serviceUrl))
+        {
+            return new BasicAWSCredentials(
+                string.IsNullOrWhiteSpace(accessKey) ? "test" : accessKey,
+                string.IsNullOrWhiteSpace(secretKey) ? "test" : secretKey);
+        }
+
+        if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
+            return FallbackCredentialsFactory.GetCredentials();
 
         if (!string.IsNullOrWhiteSpace(sessionToken))
             return new SessionAWSCredentials(accessKey, secretKey, sessionToken);
