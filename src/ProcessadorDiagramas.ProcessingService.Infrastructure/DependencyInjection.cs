@@ -21,6 +21,8 @@ namespace ProcessadorDiagramas.ProcessingService.Infrastructure;
 
 public static class DependencyInjection
 {
+    private const int DefaultDbCommandTimeoutSeconds = 30;
+
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
         IConfiguration configuration,
@@ -30,7 +32,9 @@ public static class DependencyInjection
         ArgumentNullException.ThrowIfNull(environment);
 
         services.AddDbContext<AppDbContext>(options =>
-            options.UseNpgsql(configuration.GetConnectionString("DefaultConnection")));
+            options.UseNpgsql(
+                configuration.GetConnectionString("DefaultConnection"),
+                npgsqlOptions => npgsqlOptions.CommandTimeout(DefaultDbCommandTimeoutSeconds)));
 
         services.AddScoped<IDiagramProcessingJobRepository, DiagramProcessingJobRepository>();
         services.AddScoped<IDiagramProcessingResultRepository, DiagramProcessingResultRepository>();

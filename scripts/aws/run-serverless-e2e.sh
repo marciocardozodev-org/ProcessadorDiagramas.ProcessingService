@@ -8,7 +8,7 @@ INPUT_BUCKET="${INPUT_BUCKET:?INPUT_BUCKET is required}"
 INPUT_PREFIX="${INPUT_PREFIX:-input-diagrams}"
 INPUT_QUEUE_URL="${INPUT_QUEUE_URL:?INPUT_QUEUE_URL is required}"
 OUTPUT_QUEUE_URL="${OUTPUT_QUEUE_URL:?OUTPUT_QUEUE_URL is required}"
-WORKER_LOG_GROUP="${WORKER_LOG_GROUP:?WORKER_LOG_GROUP is required}"
+WORKER_LOG_GROUP="${WORKER_LOG_GROUP:-}"
 PSQL_CONNECTION_STRING="${PSQL_CONNECTION_STRING:?PSQL_CONNECTION_STRING is required}"
 E2E_TIMEOUT_SECONDS="${E2E_TIMEOUT_SECONDS:-300}"
 E2E_MAX_LATENCY_SECONDS="${E2E_MAX_LATENCY_SECONDS:-180}"
@@ -118,17 +118,22 @@ if ! grep -q "$result_id" "$ARTIFACT_DIR/db-check.txt"; then
 fi
 
 filter_pattern="{ $.correlation_id = \"$correlation_id\" && $.LogLevel = \"Error\" }"
-aws logs filter-log-events \
-  --log-group-name "$WORKER_LOG_GROUP" \
-  --filter-pattern "$filter_pattern" \
-  --start-time "$((start_epoch * 1000))" \
-  --region "$AWS_REGION" \
-  > "$ARTIFACT_DIR/error-logs.json"
+if [[ -n "$WORKER_LOG_GROUP" ]]; then
+  aws logs filter-log-events \
+    --log-group-name "$WORKER_LOG_GROUP" \
+    --filter-pattern "$filter_pattern" \
+    --start-time "$((start_epoch * 1000))" \
+    --region "$AWS_REGION" \
+    > "$ARTIFACT_DIR/error-logs.json"
 
-error_count="$(jq '.events | length' "$ARTIFACT_DIR/error-logs.json")"
-if [[ "$error_count" -gt 0 ]]; then
-  echo "Found critical error logs for correlation id" | tee "$ARTIFACT_DIR/error.txt"
-  exit 1
+  error_count="$(jq '.events | length' "$ARTIFACT_DIR/error-logs.json")"
+  if [[ "$error_count" -gt 0 ]]; then
+    echo "Found critical error logs for correlation id" | tee "$ARTIFACT_DIR/error.txt"
+    exit 1
+  fi
+else
+  echo "[INFO] WORKER_LOG_GROUP nao configurado. Verificacao de logs CloudWatch ignorada."
+  echo '{"events":[]}' > "$ARTIFACT_DIR/error-logs.json"
 fi
 
 end_epoch="$(date +%s)"

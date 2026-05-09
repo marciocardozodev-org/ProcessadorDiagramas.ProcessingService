@@ -74,7 +74,8 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
             sourceStorage.Object,
             preprocessor.Object,
             aiPipeline.Object,
-            messageBus.Object);
+            messageBus.Object,
+            NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
 
         var handler = new AnalysisProcessRequestedEventHandler(commandHandler, processingHandler, NullLogger<AnalysisProcessRequestedEventHandler>.Instance);
         var @event = new AnalysisProcessRequestedEvent(Guid.NewGuid(), "uploads/diagram.png", "corr-123", DateTime.UtcNow);
@@ -99,7 +100,8 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
             Mock.Of<IDiagramSourceStorage>(),
             Mock.Of<IDiagramPreprocessor>(),
             Mock.Of<IDiagramAiPipeline>(),
-            Mock.Of<IMessageBus>());
+            Mock.Of<IMessageBus>(),
+            NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
         var handler = new AnalysisProcessRequestedEventHandler(commandHandler, processingHandler, NullLogger<AnalysisProcessRequestedEventHandler>.Instance);
 
         var act = () => handler.HandleAsync("{invalid-json");
