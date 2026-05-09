@@ -170,6 +170,26 @@ QUEUE_NAME=processador-diagramas-processingservice-queue \
 
 O runtime do serviço não deve criar/alterar infraestrutura de SNS/SQS; em execução ele apenas publica, consome e remove mensagens.
 
+### Cleanup de recursos AWS
+
+Para remover recursos criados e economizar créditos (importante no AWS Academy), use o script de limpeza:
+
+```bash
+AWS_REGION=us-east-1 \
+TOPIC_NAME=processador-diagramas-processingservice-hml-topic \
+QUEUE_NAME=processador-diagramas-processingservice-hml-queue \
+LAMBDA_FUNCTION_NAME=processador-diagramas-processingservice-hml \
+./scripts/cleanup-aws-resources.sh
+```
+
+O script remove:
+- Tópico SNS
+- Fila SQS
+- Função Lambda (opcional)
+- Imagens ECR (opcional)
+
+Será solicitado confirmação antes de fazer qualquer exclusão.
+
 ### Deploy serverless em AWS Lambda
 
 Para publicar a aplicação como Lambda container image, use o workflow manual:

@@ -53,7 +53,11 @@ read -r -d '' QUEUE_POLICY <<JSON || true
 }
 JSON
 
-aws_cmd sqs set-queue-attributes --queue-url "$QUEUE_URL" --attributes "Policy=$QUEUE_POLICY" >/dev/null
+QUEUE_POLICY_COMPACT="$(printf '%s' "$QUEUE_POLICY" | tr -d '\n' | sed 's/[[:space:]]\+/ /g')"
+
+aws_cmd sqs set-queue-attributes \
+  --queue-url "$QUEUE_URL" \
+  --attributes "Policy=$QUEUE_POLICY_COMPACT" >/dev/null
 
 echo "[init] done"
 echo "TOPIC_ARN=$TOPIC_ARN"
