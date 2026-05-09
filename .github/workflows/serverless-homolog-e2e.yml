@@ -78,9 +78,16 @@ jobs:
         if: github.event_name == 'push' && (github.ref_name == 'homolog' || github.ref_name == 'master')
         env:
           DIAGRAM_SOURCE_BUCKET_NAME: ${{ vars.DIAGRAM_SOURCE_BUCKET_NAME }}
+          AI_PROVIDER_BASE_URL: ${{ vars.AI_PROVIDER_BASE_URL }}
+          AI_PROVIDER_MODEL: ${{ vars.AI_PROVIDER_MODEL }}
         run: |
-          if [ -z "$DIAGRAM_SOURCE_BUCKET_NAME" ]; then
-            echo "[ERROR] Variável obrigatória ausente: DIAGRAM_SOURCE_BUCKET_NAME"
+          MISSING=""
+          [ -z "$DIAGRAM_SOURCE_BUCKET_NAME" ] && MISSING="$MISSING DIAGRAM_SOURCE_BUCKET_NAME"
+          [ -z "$AI_PROVIDER_BASE_URL" ] && MISSING="$MISSING AI_PROVIDER_BASE_URL"
+          [ -z "$AI_PROVIDER_MODEL" ] && MISSING="$MISSING AI_PROVIDER_MODEL"
+
+          if [ -n "$MISSING" ]; then
+            echo "[ERROR] Variáveis obrigatórias ausentes:$MISSING"
             echo "[INFO] Configure a var em Settings > Secrets and variables > Actions."
             exit 1
           fi
@@ -202,7 +209,7 @@ jobs:
             --from-literal=DiagramSourceStorage__Provider="S3" \
             --from-literal=AiProvider__Enabled="true" \
             --from-literal=AiProvider__Provider="OpenAICompatible" \
-            --from-literal=AiProvider__Model="${{ vars.AI_PROVIDER_MODEL || 'gpt-4o-mini' }}" \
+            --from-literal=AiProvider__Model="${{ vars.AI_PROVIDER_MODEL }}" \
             --from-literal=AiProvider__Temperature="${{ vars.AI_PROVIDER_TEMPERATURE || '0.2' }}" \
             --from-literal=AiProvider__MaxTokens="${{ vars.AI_PROVIDER_MAX_TOKENS || '500' }}" \
             --from-literal=AiProvider__MaxInputCharacters="${{ vars.AI_PROVIDER_MAX_INPUT_CHARACTERS || '12000' }}" \
@@ -222,7 +229,7 @@ jobs:
           AWS_QUEUE_URL: ${{ secrets.AWS__QUEUEURL }}
           DIAGRAM_SOURCE_BUCKET: ${{ vars.DIAGRAM_SOURCE_BUCKET_NAME }}
           DIAGRAM_SOURCE_PREFIX: ${{ vars.DIAGRAM_SOURCE_KEY_PREFIX || 'inputs/' }}
-          AI_PROVIDER_BASE_URL: ${{ vars.AI_PROVIDER_BASE_URL || 'https://api.openai.com/' }}
+          AI_PROVIDER_BASE_URL: ${{ vars.AI_PROVIDER_BASE_URL }}
           AI_PROVIDER_API_KEY: ${{ secrets.AI_PROVIDER_API_KEY }}
         run: |
           AWS_ACCESS_KEY_ID_TRIMMED="$(echo "$AWS_ACCESS_KEY_ID" | xargs)"
