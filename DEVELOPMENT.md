@@ -43,6 +43,17 @@ O smoke test completo valida:
 IMAGE_TAG=local ./scripts/minikube/deploy.sh
 ```
 
+## Ambiente AWS com IAM restrito
+
+Se a conta não permitir ações de IAM necessárias para Lambda (por exemplo, `iam:GetRole` e `iam:PassRole`), adote este fluxo como padrão:
+
+- manter o microserviço em container (EKS/Minikube)
+- consumir mensagens da SQS via worker
+- publicar eventos via SNS
+- manter S3 como origem dos diagramas
+
+Esse modo preserva o processamento assíncrono sem exigir criação/atualização de função Lambda.
+
 ## Direcao das proximas etapas
 
 - manter banco proprio para este servico

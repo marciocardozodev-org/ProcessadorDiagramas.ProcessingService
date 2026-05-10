@@ -1,0 +1,141 @@
+name: Serverless Lambda Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      lambda_function_name:
+        description: Nome da Lambda
+        required: true
+        type: string
+      lambda_execution_role_arn:
+        description: ARN da role de execução da Lambda
+        required: true
+        type: string
+      diagram_source_bucket_name:
+        description: Bucket S3 de entrada dos diagramas
+        required: true
+        type: string
+      diagram_source_key_prefix:
+        description: Prefixo dos diagramas no bucket
+        required: false
+        default: inputs/
+        type: string
+      db_connection_parameter_arn:
+        description: ARN do parâmetro SSM da connection string
+        required: true
+        type: string
+      ai_api_key_secret_arn:
+        description: ARN do secret do token da IA
+        required: true
+        type: string
+      ai_provider_base_url:
+        description: Base URL do provider IA compatível com OpenAI
+        required: true
+        type: string
+      ai_provider_model:
+        description: Modelo do provider IA
+        required: true
+        type: string
+      ecr_repository_name:
+        description: Nome do repositório ECR
+        required: false
+        default: processador-diagramas-processingservice-lambda
+        type: string
+      sqs_queue_name:
+        description: Nome da fila SQS de entrada
+        required: false
+        default: processador-diagramas-processingservice-input
+        type: string
+      sns_topic_name:
+        description: Nome do tópico SNS de saída
+        required: false
+        default: processador-diagramas-processingservice-events
+        type: string
+      aws_region:
+        description: Região AWS
+        required: false
+        default: us-east-1
+        type: string
+      lambda_memory_size:
+        description: Memória da Lambda em MB
+        required: false
+        default: "1024"
+        type: string
+      lambda_timeout:
+        description: Timeout da Lambda em segundos
+        required: false
+        default: "120"
+        type: string
+      lambda_architecture:
+        description: Arquitetura da Lambda
+        required: false
+        default: x86_64
+        type: choice
+        options:
+          - x86_64
+          - arm64
+
+jobs:
+  deploy-serverless:
+    name: Deploy Serverless Lambda
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ inputs.aws_region }}
+      AWS_LAMBDA_FUNCTION_NAME: ${{ inputs.lambda_function_name }}
+      AWS_LAMBDA_ROLE_ARN: ${{ inputs.lambda_execution_role_arn }}
+      AWS_ECR_REPOSITORY_NAME: ${{ inputs.ecr_repository_name }}
+      AWS_SQS_QUEUE_NAME: ${{ inputs.sqs_queue_name }}
+      AWS_SNS_TOPIC_NAME: ${{ inputs.sns_topic_name }}
+      DIAGRAM_SOURCE_BUCKET_NAME: ${{ inputs.diagram_source_bucket_name }}
+      DIAGRAM_SOURCE_KEY_PREFIX: ${{ inputs.diagram_source_key_prefix }}
+      AWS_DB_CONNECTION_PARAMETER_ARN: ${{ inputs.db_connection_parameter_arn }}
+      AWS_AI_API_KEY_SECRET_ARN: ${{ inputs.ai_api_key_secret_arn }}
+      AI_PROVIDER_BASE_URL: ${{ inputs.ai_provider_base_url }}
+      AI_PROVIDER_MODEL: ${{ inputs.ai_provider_model }}
+      AWS_LAMBDA_MEMORY_SIZE: ${{ inputs.lambda_memory_size }}
+      AWS_LAMBDA_TIMEOUT: ${{ inputs.lambda_timeout }}
+      AWS_LAMBDA_ARCHITECTURE: ${{ inputs.lambda_architecture }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate AWS credentials
+        run: aws sts get-caller-identity
+
+      - name: Verificar permissoes IAM necessarias para deploy Lambda
+        run: |
+          echo "[INFO] Verificando permissoes IAM para deploy de Lambda..."
+          MISSING=""
+
+          if ! aws iam get-role --role-name "$(basename "${{ inputs.lambda_execution_role_arn }}")" >/dev/null 2>&1; then
+            MISSING="$MISSING iam:GetRole"
+          fi
+
+          if ! aws iam simulate-principal-policy \
+            --policy-source-arn "$(aws sts get-caller-identity --query Arn --output text)" \
+            --action-names "iam:PassRole" \
+            --resource-arns "${{ inputs.lambda_execution_role_arn }}" \
+            --query 'EvaluationResults[0].EvalDecision' --output text 2>/dev/null | grep -qi "allowed"; then
+            MISSING="$MISSING iam:PassRole"
+          fi
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::Permissoes IAM ausentes ou bloqueadas:$MISSING"
+            echo ""
+            echo "Este workflow requer iam:GetRole e iam:PassRole sobre a role de execucao da Lambda."
+            echo "Em contas com IAM restrito (ex.: ambientes de laboratorio), essas acoes podem ter deny explicito."
+            echo ""
+            echo "Alternativa recomendada: use o deploy Kubernetes via pipeline automatica (serverless-homolog-e2e.yml),"
+            echo "que nao depende de permissoes IAM para Lambda."
+            exit 1
+          fi
+
+          echo "[OK] Permissoes IAM verificadas."
+
+      - name: Deploy Lambda container image
+        run: bash scripts/deploy-serverless-lambda.sh

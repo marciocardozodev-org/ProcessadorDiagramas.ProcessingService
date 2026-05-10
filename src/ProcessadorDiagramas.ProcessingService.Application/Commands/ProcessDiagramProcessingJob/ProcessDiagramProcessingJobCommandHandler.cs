@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using ProcessadorDiagramas.ProcessingService.Application.Interfaces;
 using ProcessadorDiagramas.ProcessingService.Application.Contracts.Events;
 using ProcessadorDiagramas.ProcessingService.Domain.Entities;
@@ -15,6 +16,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
     private readonly IDiagramPreprocessor _diagramPreprocessor;
     private readonly IDiagramAiPipeline _diagramAiPipeline;
     private readonly IMessageBus _messageBus;
+    private readonly ILogger<ProcessDiagramProcessingJobCommandHandler> _logger;
 
     public ProcessDiagramProcessingJobCommandHandler(
         IDiagramProcessingJobRepository jobRepository,
@@ -23,7 +25,8 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         IDiagramSourceStorage diagramSourceStorage,
         IDiagramPreprocessor diagramPreprocessor,
         IDiagramAiPipeline diagramAiPipeline,
-        IMessageBus messageBus)
+        IMessageBus messageBus,
+        ILogger<ProcessDiagramProcessingJobCommandHandler> logger)
     {
         _jobRepository = jobRepository;
         _resultRepository = resultRepository;
@@ -32,6 +35,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         _diagramPreprocessor = diagramPreprocessor;
         _diagramAiPipeline = diagramAiPipeline;
         _messageBus = messageBus;
+        _logger = logger;
     }
 
     public async Task<ProcessDiagramProcessingJobResponse> HandleAsync(
@@ -59,16 +63,26 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
 
         try
         {
+            _logger.LogInformation(
+                "Starting processing for job {JobId}, analysis {DiagramAnalysisProcessId}, attempt {AttemptNumber}.",
+                job.Id,
+                job.DiagramAnalysisProcessId,
+                attempt.AttemptNumber);
+
             job.MarkAsStarted();
             await _jobRepository.UpdateAsync(job, cancellationToken);
             await PublishStartedAsync(job, attempt.AttemptNumber, cancellationToken);
 
+            _logger.LogInformation("Reading source diagram for job {JobId} from {InputStorageKey}.", job.Id, job.InputStorageKey);
             var diagramSource = await _diagramSourceStorage.ReadAsync(job.InputStorageKey, cancellationToken);
+
+            _logger.LogInformation("Preprocessing diagram content for job {JobId}.", job.Id);
             var preprocessedContent = await _diagramPreprocessor.PreprocessAsync(diagramSource, cancellationToken);
 
             job.SetPreprocessedContent(preprocessedContent);
             await _jobRepository.UpdateAsync(job, cancellationToken);
 
+            _logger.LogInformation("Submitting preprocessed diagram to AI provider for job {JobId}.", job.Id);
             var aiResult = await _diagramAiPipeline.AnalyzeAsync(preprocessedContent, cancellationToken);
             var persistedResult = DiagramProcessingResult.Create(job.Id, aiResult.RawOutput);
             await _resultRepository.AddAsync(persistedResult, cancellationToken);
@@ -81,6 +95,12 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
 
             await PublishCompletedAsync(job, persistedResult, attempt.AttemptNumber, cancellationToken);
 
+            _logger.LogInformation(
+                "Completed processing for job {JobId}, analysis {DiagramAnalysisProcessId}, attempt {AttemptNumber}.",
+                job.Id,
+                job.DiagramAnalysisProcessId,
+                attempt.AttemptNumber);
+
             return new ProcessDiagramProcessingJobResponse(
                 job.Id,
                 job.Status.ToString(),
@@ -90,6 +110,13 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         }
         catch (Exception ex)
         {
+            _logger.LogError(
+                ex,
+                "Processing failed for job {JobId}, analysis {DiagramAnalysisProcessId}, attempt {AttemptNumber}.",
+                job.Id,
+                job.DiagramAnalysisProcessId,
+                attempt.AttemptNumber);
+
             attempt.MarkAsFailed(ex.Message);
             await _attemptRepository.UpdateAsync(attempt, cancellationToken);
 

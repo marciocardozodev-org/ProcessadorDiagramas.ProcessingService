@@ -1,0 +1,70 @@
+name: Serverless AWS E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      lambda_function_name:
+        description: Nome da Lambda a ser validada
+        required: true
+        type: string
+      diagram_source_bucket_name:
+        description: Bucket S3 de entrada dos diagramas
+        required: true
+        type: string
+      diagram_source_key_prefix:
+        description: Prefixo do key no bucket
+        required: false
+        default: inputs/
+        type: string
+      test_diagram_key:
+        description: Nome do arquivo de teste
+        required: false
+        default: e2e-serverless.mmd
+        type: string
+      aws_region:
+        description: Região AWS
+        required: false
+        default: us-east-1
+        type: string
+
+jobs:
+  smoke-serverless:
+    name: Smoke Serverless AWS
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ inputs.aws_region }}
+      AWS_LAMBDA_FUNCTION_NAME: ${{ inputs.lambda_function_name }}
+      DIAGRAM_SOURCE_BUCKET_NAME: ${{ inputs.diagram_source_bucket_name }}
+      DIAGRAM_SOURCE_KEY_PREFIX: ${{ inputs.diagram_source_key_prefix }}
+      TEST_DIAGRAM_KEY: ${{ inputs.test_diagram_key }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate AWS credentials
+        run: aws sts get-caller-identity
+
+      - name: Verificar existencia da funcao Lambda
+        run: |
+          echo "[INFO] Verificando se a funcao Lambda existe e esta acessivel..."
+          if ! aws lambda get-function \
+            --function-name "${{ inputs.lambda_function_name }}" \
+            --region "${{ inputs.aws_region }}" >/dev/null 2>&1; then
+            echo "::error::Funcao Lambda '${{ inputs.lambda_function_name }}' nao encontrada ou sem permissao de acesso."
+            echo ""
+            echo "Este workflow pressupoe que a Lambda ja foi publicada via serverless-lambda-deploy.yml."
+            echo "Em contas com IAM restrito, o deploy da Lambda pode nao ter sido possivel."
+            echo ""
+            echo "Alternativa recomendada: valide o fluxo E2E via pipeline Kubernetes (serverless-homolog-e2e.yml),"
+            echo "que realiza smoke test no endpoint de health do worker em execucao no EKS."
+            exit 1
+          fi
+          echo "[OK] Funcao Lambda encontrada."
+
+      - name: Run serverless smoke test
+        run: bash scripts/test-serverless-aws.sh

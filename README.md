@@ -47,6 +47,19 @@ dotnet test ProcessadorDiagramas.ProcessingService.sln
 dotnet run --project src/ProcessadorDiagramas.ProcessingService.API
 ```
 
+## Modo recomendado em ambiente IAM restrito
+
+Quando a conta AWS possui bloqueios administrativos (por exemplo, `iam:GetRole` e `iam:PassRole` com `explicit deny`), o caminho oficial deste serviço passa a ser Kubernetes (EKS/Minikube), sem depender de Lambda.
+
+Fluxo assíncrono suportado sem Lambda:
+
+- upload do arquivo no S3
+- evento no SNS
+- entrega da mensagem na SQS
+- consumo contínuo pelo worker no Kubernetes
+
+Nesse modo, o serviço continua cumprindo seu papel de processamento ponta a ponta.
+
 ## Banco e migrations
 
 Migration inicial gerada em:
@@ -126,6 +139,93 @@ IMAGE_TAG=local ./scripts/minikube/deploy.sh
 Observação: o pipeline OpenAI-compatible agora aplica truncamento configurável da entrada com `AiProvider__MaxInputCharacters`, reduzindo tokens de prompt e custo por chamada. Se `AIPROVIDER__ENABLED=true`, o deploy valida a presença de `AIPROVIDER__APIKEY` antes de aplicar os manifests.
 
 O script sobe Postgres, LocalStack, aplica migrations, publica uma mensagem `AnalysisProcessRequestedEvent` na fila de entrada e valida o evento `AnalysisProcessingCompletedEvent` na fila de saída.
+
+### Smoke serverless em AWS
+
+O projeto também possui um caminho serverless real baseado em AWS Lambda.
+
+Importante: em contas com IAM restrito (como ambientes de laboratório sem acesso administrativo), esse fluxo pode falhar por falta de permissões como `iam:PassRole`/`iam:GetRole`. Nesses casos, use o deploy Kubernetes como trilha principal.
+
+O smoke test direto em AWS fica em:
+
+- .github/workflows/serverless-aws-e2e.yml
+
+Ele faz upload do diagrama para S3, invoca a Lambda com um payload SQS sintético e valida o log de processamento.
+
+Para executar, configure os secrets de AWS e informe os inputs do workflow manual:
+
+- nome da Lambda
+- bucket S3 de entrada
+- prefixo do key do diagrama
+
+### Bootstrap one-time de SNS/SQS
+
+Para ambientes onde os recursos de mensageria ainda não existem, use o script one-time:
+
+- scripts/init-aws-resources.sh
+
+Exemplo (AWS real):
+
+```bash
+AWS_REGION=us-east-1 \
+TOPIC_NAME=processador-diagramas-processingservice-hml-topic \
+QUEUE_NAME=processador-diagramas-processingservice-hml-queue \
+./scripts/init-aws-resources.sh
+```
+
+Exemplo (LocalStack):
+
+```bash
+AWS_REGION=us-east-1 \
+AWS_ENDPOINT_URL=http://localhost:4566 \
+TOPIC_NAME=processador-diagramas-processingservice-topic \
+QUEUE_NAME=processador-diagramas-processingservice-queue \
+./scripts/init-aws-resources.sh
+```
+
+O runtime do serviço não deve criar/alterar infraestrutura de SNS/SQS; em execução ele apenas publica, consome e remove mensagens.
+
+### Cleanup de recursos AWS
+
+Para remover recursos criados e economizar créditos (importante no AWS Academy), use o script de limpeza:
+
+```bash
+AWS_REGION=us-east-1 \
+TOPIC_NAME=processador-diagramas-processingservice-hml-topic \
+QUEUE_NAME=processador-diagramas-processingservice-hml-queue \
+LAMBDA_FUNCTION_NAME=processador-diagramas-processingservice-hml \
+./scripts/cleanup-aws-resources.sh
+```
+
+O script remove:
+- Tópico SNS
+- Fila SQS
+- Função Lambda (opcional)
+- Imagens ECR (opcional)
+
+Será solicitado confirmação antes de fazer qualquer exclusão.
+
+### Deploy serverless em AWS Lambda
+
+Para publicar a aplicação como Lambda container image, use o workflow manual:
+
+- .github/workflows/serverless-lambda-deploy.yml
+
+Esse fluxo cria/atualiza a imagem no ECR, publica a função Lambda, provisiona uma fila SQS de entrada e configura o event source mapping da fila para a Lambda. O tópico SNS continua sendo usado para os eventos de saída do processamento.
+
+Pré-requisito de IAM para esse deploy:
+
+- permissões de `lambda:CreateFunction`/`lambda:UpdateFunction*`
+- permissão de `iam:PassRole` para a role de execução da Lambda
+
+Sem essas permissões, prefira o caminho Kubernetes neste repositório.
+
+Você precisa informar:
+
+- ARN da role de execução da Lambda
+- ARN do parâmetro SSM com a connection string
+- ARN do secret com a chave da IA
+- bucket S3 e prefixo dos diagramas
 
 ## Kubernetes
 

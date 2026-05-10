@@ -111,7 +111,7 @@ internal static class AwsRuntimeConfigurationBootstrapper
 
     private static IAmazonSimpleSystemsManagement CreateSsmClient(string region, string? serviceUrl)
     {
-        var credentials = CreateCredentials();
+        var credentials = CreateCredentials(serviceUrl);
 
         if (!string.IsNullOrWhiteSpace(serviceUrl))
         {
@@ -128,7 +128,7 @@ internal static class AwsRuntimeConfigurationBootstrapper
 
     private static IAmazonSecretsManager CreateSecretsClient(string region, string? serviceUrl)
     {
-        var credentials = CreateCredentials();
+        var credentials = CreateCredentials(serviceUrl);
 
         if (!string.IsNullOrWhiteSpace(serviceUrl))
         {
@@ -143,16 +143,26 @@ internal static class AwsRuntimeConfigurationBootstrapper
         return new AmazonSecretsManagerClient(credentials, RegionEndpoint.GetBySystemName(region));
     }
 
-    private static AWSCredentials CreateCredentials()
+    private static AWSCredentials CreateCredentials(string? serviceUrl = null)
     {
         var accessKey = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID")
                      ?? Environment.GetEnvironmentVariable("Aws__AccessKeyId")
-                     ?? "test";
+                     ?? string.Empty;
         var secretKey = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")
                      ?? Environment.GetEnvironmentVariable("Aws__SecretAccessKey")
-                     ?? "test";
+                     ?? string.Empty;
         var sessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN")
                         ?? Environment.GetEnvironmentVariable("Aws__SessionToken");
+
+        if (!string.IsNullOrWhiteSpace(serviceUrl))
+        {
+            return new BasicAWSCredentials(
+                string.IsNullOrWhiteSpace(accessKey) ? "test" : accessKey,
+                string.IsNullOrWhiteSpace(secretKey) ? "test" : secretKey);
+        }
+
+        if (string.IsNullOrWhiteSpace(accessKey) || string.IsNullOrWhiteSpace(secretKey))
+            return FallbackCredentialsFactory.GetCredentials();
 
         if (!string.IsNullOrWhiteSpace(sessionToken))
             return new SessionAWSCredentials(accessKey, secretKey, sessionToken);
