@@ -12,6 +12,113 @@ WORKER_LOG_GROUP="${WORKER_LOG_GROUP:-}"
 PSQL_CONNECTION_STRING="${PSQL_CONNECTION_STRING:?PSQL_CONNECTION_STRING is required}"
 E2E_TIMEOUT_SECONDS="${E2E_TIMEOUT_SECONDS:-300}"
 E2E_MAX_LATENCY_SECONDS="${E2E_MAX_LATENCY_SECONDS:-180}"
+K8S_NAMESPACE="${K8S_NAMESPACE:-}"
+PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-5}"
+
+parse_psql_connection_string() {
+  PSQL_HOST=""
+  PSQL_PORT=""
+  PSQL_DATABASE=""
+  PSQL_USERNAME=""
+  PSQL_PASSWORD=""
+
+  if [[ "$PSQL_CONNECTION_STRING" != *";"* ]]; then
+    return
+  fi
+
+  IFS=';' read -ra conn_parts <<< "$PSQL_CONNECTION_STRING"
+  for part in "${conn_parts[@]}"; do
+    part="${part#${part%%[![:space:]]*}}"
+    part="${part%${part##*[![:space:]]}}"
+
+    [[ -z "$part" ]] && continue
+
+    local key="${part%%=*}"
+    local value="${part#*=}"
+
+    case "${key,,}" in
+      host)
+        PSQL_HOST="$value"
+        ;;
+      port)
+        PSQL_PORT="$value"
+        ;;
+      database)
+        PSQL_DATABASE="$value"
+        ;;
+      username|user|userid|user\ id)
+        PSQL_USERNAME="$value"
+        ;;
+      password)
+        PSQL_PASSWORD="$value"
+        ;;
+    esac
+  done
+}
+
+run_psql_query_locally() {
+  local query="$1"
+
+  if [[ "$PSQL_CONNECTION_STRING" != *";"* ]]; then
+    PGCONNECT_TIMEOUT="$PGCONNECT_TIMEOUT" psql "$PSQL_CONNECTION_STRING" -At -c "$query"
+    return
+  fi
+
+  parse_psql_connection_string
+
+  PGHOST="$PSQL_HOST" \
+  PGPORT="$PSQL_PORT" \
+  PGDATABASE="$PSQL_DATABASE" \
+  PGUSER="$PSQL_USERNAME" \
+  PGPASSWORD="$PSQL_PASSWORD" \
+  PGCONNECT_TIMEOUT="$PGCONNECT_TIMEOUT" \
+    psql -At -c "$query"
+}
+
+run_psql_query_in_cluster() {
+  local query="$1"
+
+  if ! command -v kubectl >/dev/null 2>&1 || [[ -z "$K8S_NAMESPACE" ]]; then
+    return 1
+  fi
+
+  parse_psql_connection_string
+
+  local pod_name="psql-check-$(date +%s)"
+  kubectl run "$pod_name" \
+    --rm \
+    -i \
+    --restart=Never \
+    --image=postgres:16-alpine \
+    -n "$K8S_NAMESPACE" \
+    --env "PGPASSWORD=$PSQL_PASSWORD" \
+    --command -- \
+    psql \
+      -h "$PSQL_HOST" \
+      -p "$PSQL_PORT" \
+      -U "$PSQL_USERNAME" \
+      -d "$PSQL_DATABASE" \
+      -At \
+      -c "$query"
+}
+
+run_psql_query() {
+  local query="$1"
+  local local_error_file="$ARTIFACT_DIR/db-check-local.err"
+
+  if run_psql_query_locally "$query" 2>"$local_error_file"; then
+    rm -f "$local_error_file"
+    return
+  fi
+
+  if run_psql_query_in_cluster "$query"; then
+    rm -f "$local_error_file"
+    return
+  fi
+
+  cat "$local_error_file" >&2 || true
+  return 1
+}
 
 mkdir -p "$ARTIFACT_DIR"
 
@@ -105,7 +212,7 @@ if [[ -z "$result_id" || "$result_id" == "null" ]]; then
 fi
 
 query="SELECT j.\"Id\", j.\"Status\", r.\"Id\" AS \"ResultId\" FROM \"DiagramProcessingJobs\" j LEFT JOIN \"DiagramProcessingResults\" r ON r.\"DiagramProcessingJobId\" = j.\"Id\" WHERE j.\"DiagramAnalysisProcessId\" = '$analysis_id';"
-psql "$PSQL_CONNECTION_STRING" -At -c "$query" > "$ARTIFACT_DIR/db-check.txt"
+run_psql_query "$query" > "$ARTIFACT_DIR/db-check.txt"
 
 if ! grep -q "|Completed|" "$ARTIFACT_DIR/db-check.txt"; then
   echo "DB validation failed: status not Completed" | tee "$ARTIFACT_DIR/error.txt"
