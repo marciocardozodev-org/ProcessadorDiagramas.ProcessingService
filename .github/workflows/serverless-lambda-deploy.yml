@@ -107,5 +107,35 @@ jobs:
       - name: Validate AWS credentials
         run: aws sts get-caller-identity
 
+      - name: Verificar permissoes IAM necessarias para deploy Lambda
+        run: |
+          echo "[INFO] Verificando permissoes IAM para deploy de Lambda..."
+          MISSING=""
+
+          if ! aws iam get-role --role-name "$(basename "${{ inputs.lambda_execution_role_arn }}")" >/dev/null 2>&1; then
+            MISSING="$MISSING iam:GetRole"
+          fi
+
+          if ! aws iam simulate-principal-policy \
+            --policy-source-arn "$(aws sts get-caller-identity --query Arn --output text)" \
+            --action-names "iam:PassRole" \
+            --resource-arns "${{ inputs.lambda_execution_role_arn }}" \
+            --query 'EvaluationResults[0].EvalDecision' --output text 2>/dev/null | grep -qi "allowed"; then
+            MISSING="$MISSING iam:PassRole"
+          fi
+
+          if [ -n "$MISSING" ]; then
+            echo "::error::Permissoes IAM ausentes ou bloqueadas:$MISSING"
+            echo ""
+            echo "Este workflow requer iam:GetRole e iam:PassRole sobre a role de execucao da Lambda."
+            echo "Em contas com IAM restrito (ex.: ambientes de laboratorio), essas acoes podem ter deny explicito."
+            echo ""
+            echo "Alternativa recomendada: use o deploy Kubernetes via pipeline automatica (serverless-homolog-e2e.yml),"
+            echo "que nao depende de permissoes IAM para Lambda."
+            exit 1
+          fi
+
+          echo "[OK] Permissoes IAM verificadas."
+
       - name: Deploy Lambda container image
         run: bash scripts/deploy-serverless-lambda.sh

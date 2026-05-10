@@ -49,5 +49,22 @@ jobs:
       - name: Validate AWS credentials
         run: aws sts get-caller-identity
 
+      - name: Verificar existencia da funcao Lambda
+        run: |
+          echo "[INFO] Verificando se a funcao Lambda existe e esta acessivel..."
+          if ! aws lambda get-function \
+            --function-name "${{ inputs.lambda_function_name }}" \
+            --region "${{ inputs.aws_region }}" >/dev/null 2>&1; then
+            echo "::error::Funcao Lambda '${{ inputs.lambda_function_name }}' nao encontrada ou sem permissao de acesso."
+            echo ""
+            echo "Este workflow pressupoe que a Lambda ja foi publicada via serverless-lambda-deploy.yml."
+            echo "Em contas com IAM restrito, o deploy da Lambda pode nao ter sido possivel."
+            echo ""
+            echo "Alternativa recomendada: valide o fluxo E2E via pipeline Kubernetes (serverless-homolog-e2e.yml),"
+            echo "que realiza smoke test no endpoint de health do worker em execucao no EKS."
+            exit 1
+          fi
+          echo "[OK] Funcao Lambda encontrada."
+
       - name: Run serverless smoke test
         run: bash scripts/test-serverless-aws.sh

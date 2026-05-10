@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FluentAssertions;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ProcessadorDiagramas.ProcessingService.Application.Contracts.Events;
 using ProcessadorDiagramas.ProcessingService.Application.Commands.ProcessDiagramProcessingJob;
@@ -52,7 +53,8 @@ public sealed class ProcessDiagramProcessingJobCommandHandlerTests
             storage.Object,
             preprocessor.Object,
             aiPipeline.Object,
-            messageBus.Object);
+            messageBus.Object,
+            NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
 
         var response = await handler.HandleAsync(new ProcessDiagramProcessingJobCommand(job.Id));
 
@@ -103,7 +105,8 @@ public sealed class ProcessDiagramProcessingJobCommandHandlerTests
             storage.Object,
             Mock.Of<IDiagramPreprocessor>(),
             Mock.Of<IDiagramAiPipeline>(),
-            messageBus.Object);
+            messageBus.Object,
+            NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
 
         var act = () => handler.HandleAsync(new ProcessDiagramProcessingJobCommand(job.Id));
 
@@ -161,7 +164,8 @@ public sealed class ProcessDiagramProcessingJobCommandHandlerTests
             storage.Object,
             preprocessor.Object,
             aiPipeline.Object,
-            messageBus.Object);
+            messageBus.Object,
+            NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
 
         await handler.HandleAsync(new ProcessDiagramProcessingJobCommand(job.Id));
 
