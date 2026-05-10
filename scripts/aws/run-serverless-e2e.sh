@@ -5,7 +5,7 @@ set -euo pipefail
 ARTIFACT_DIR="${ARTIFACT_DIR:-artifacts/e2e-serverless}"
 AWS_REGION="${AWS_REGION:?AWS_REGION is required}"
 INPUT_BUCKET="${INPUT_BUCKET:?INPUT_BUCKET is required}"
-INPUT_PREFIX="${INPUT_PREFIX:-input-diagrams}"
+INPUT_PREFIX="${INPUT_PREFIX:-inputs}"
 INPUT_QUEUE_URL="${INPUT_QUEUE_URL:?INPUT_QUEUE_URL is required}"
 OUTPUT_QUEUE_URL="${OUTPUT_QUEUE_URL:?OUTPUT_QUEUE_URL is required}"
 WORKER_LOG_GROUP="${WORKER_LOG_GROUP:-}"
@@ -125,7 +125,11 @@ mkdir -p "$ARTIFACT_DIR"
 analysis_id="$(cat /proc/sys/kernel/random/uuid)"
 correlation_id="e2e-${GITHUB_RUN_ID:-local}-$(date +%s)"
 requested_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-key="$INPUT_PREFIX/$analysis_id/diagram.mmd"
+if [[ -n "$INPUT_PREFIX" ]]; then
+  key="$INPUT_PREFIX/$analysis_id/diagram.mmd"
+else
+  key="$analysis_id/diagram.mmd"
+fi
 
 cat > "$ARTIFACT_DIR/diagram.mmd" <<'EOF'
 graph TD
