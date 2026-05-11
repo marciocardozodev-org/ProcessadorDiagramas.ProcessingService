@@ -58,6 +58,8 @@ public static class DependencyInjection
         }
 
         services.Configure<AiProviderSettings>(configuration.GetSection("AiProvider"));
+        services.Configure<MessagingSettings>(configuration.GetSection("Messaging"));
+        services.AddSingleton<IEventPublishingOptions, EventPublishingOptions>();
         services.AddHttpClient<OpenAiCompatibleDiagramAiPipeline>((serviceProvider, httpClient) =>
         {
             var settings = serviceProvider.GetRequiredService<IOptions<AiProviderSettings>>().Value;

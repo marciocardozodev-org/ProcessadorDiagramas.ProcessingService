@@ -40,6 +40,17 @@ public sealed class AwsMessageBus : IMessageBus
 
     public async Task PublishAsync(string eventType, string payload, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(_settings.TopicArn))
+        {
+            var configurationException = new InvalidOperationException("Aws:TopicArn is required for SNS publishing.");
+            _logger.LogError(
+                configurationException,
+                "Failed to publish event due to configuration error. errorType={ErrorType} eventType={EventType}",
+                "configuration",
+                eventType);
+            throw configurationException;
+        }
+
         var request = new PublishRequest
         {
             TopicArn = _settings.TopicArn,
@@ -54,13 +65,30 @@ public sealed class AwsMessageBus : IMessageBus
             }
         };
 
-        await ExecuteWithRetryAsync(
-            "PublishToSns",
-            () => _sns.PublishAsync(request, cancellationToken),
-            _settings.OperationRetryMaxAttempts,
-            cancellationToken);
+        try
+        {
+            var response = await ExecuteWithRetryAsync(
+                "PublishToSns",
+                () => _sns.PublishAsync(request, cancellationToken),
+                _settings.OperationRetryMaxAttempts,
+                cancellationToken);
 
-        _logger.LogInformation("Published event {EventType} to topic {TopicArn}.", eventType, _settings.TopicArn);
+            _logger.LogInformation(
+                "Published event {EventType} to topic {TopicArn}. messageId={MessageId}",
+                eventType,
+                _settings.TopicArn,
+                response.MessageId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to publish event to SNS. errorType={ErrorType} eventType={EventType} topicArn={TopicArn}",
+                ClassifyPublishError(ex),
+                eventType,
+                _settings.TopicArn);
+            throw;
+        }
     }
 
     public async Task SubscribeAsync(Func<BusMessage, CancellationToken, Task> handler, CancellationToken cancellationToken = default)
@@ -186,6 +214,26 @@ public sealed class AwsMessageBus : IMessageBus
         }
 
         return false;
+    }
+
+    private static string ClassifyPublishError(Exception exception)
+    {
+        if (exception is InvalidOperationException)
+            return "configuration";
+
+        if (exception is AmazonServiceException serviceException)
+        {
+            if (string.Equals(serviceException.ErrorCode, "AccessDenied", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(serviceException.ErrorCode, "AuthorizationError", StringComparison.OrdinalIgnoreCase)
+                || serviceException.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                return "iam_permission";
+            }
+
+            return IsTransient(serviceException) ? "messaging_transient" : "messaging_non_transient";
+        }
+
+        return IsTransient(exception) ? "messaging_transient" : "processing_or_serialization";
     }
 
     private static string ResolveEventType(
