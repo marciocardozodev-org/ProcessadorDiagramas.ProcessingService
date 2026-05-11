@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using ProcessadorDiagramas.ProcessingService.Application.Interfaces;
 using ProcessadorDiagramas.ProcessingService.Application.Contracts.Events;
@@ -16,6 +18,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
     private readonly IDiagramPreprocessor _diagramPreprocessor;
     private readonly IDiagramAiPipeline _diagramAiPipeline;
     private readonly IMessageBus _messageBus;
+    private readonly IEventPublishingOptions _eventPublishingOptions;
     private readonly ILogger<ProcessDiagramProcessingJobCommandHandler> _logger;
 
     public ProcessDiagramProcessingJobCommandHandler(
@@ -26,6 +29,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         IDiagramPreprocessor diagramPreprocessor,
         IDiagramAiPipeline diagramAiPipeline,
         IMessageBus messageBus,
+        IEventPublishingOptions eventPublishingOptions,
         ILogger<ProcessDiagramProcessingJobCommandHandler> logger)
     {
         _jobRepository = jobRepository;
@@ -35,6 +39,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         _diagramPreprocessor = diagramPreprocessor;
         _diagramAiPipeline = diagramAiPipeline;
         _messageBus = messageBus;
+        _eventPublishingOptions = eventPublishingOptions;
         _logger = logger;
     }
 
@@ -94,6 +99,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
             await _jobRepository.UpdateAsync(job, cancellationToken);
 
             await PublishCompletedAsync(job, persistedResult, attempt.AttemptNumber, cancellationToken);
+            await PublishCompletedV2Async(job, persistedResult, attempt.AttemptNumber, cancellationToken);
 
             _logger.LogInformation(
                 "Completed processing for job {JobId}, analysis {DiagramAnalysisProcessId}, attempt {AttemptNumber}.",
@@ -117,6 +123,15 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
                 job.DiagramAnalysisProcessId,
                 attempt.AttemptNumber);
 
+            if (job.Status == Domain.Enums.DiagramProcessingJobStatus.Completed)
+            {
+                _logger.LogError(
+                    ex,
+                    "Job {JobId} is already completed and cannot transition to failed. Preserving status and rethrowing exception.",
+                    job.Id);
+                throw;
+            }
+
             attempt.MarkAsFailed(ex.Message);
             await _attemptRepository.UpdateAsync(attempt, cancellationToken);
 
@@ -124,6 +139,7 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
             await _jobRepository.UpdateAsync(job, cancellationToken);
 
             await PublishFailedAsync(job, attempt.AttemptNumber, ex.Message, cancellationToken);
+            await PublishFailedV2Async(job, attempt.AttemptNumber, ex.Message, cancellationToken);
 
             throw;
         }
@@ -164,6 +180,85 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
             cancellationToken);
     }
 
+    private async Task PublishCompletedV2Async(
+        DiagramProcessingJob job,
+        DiagramProcessingResult result,
+        int attemptNumber,
+        CancellationToken cancellationToken)
+    {
+        if (!_eventPublishingOptions.PublishCompletedV2Enabled)
+            return;
+
+        var occurredAt = job.CompletedAt ?? result.CreatedAt;
+        var messageId = Guid.NewGuid().ToString("N");
+        var outputHash = BuildSha256Hash(result.RawAiOutput);
+
+        var @event = new AnalysisProcessingCompletedV2Event(
+            EventVersion: "2.0.0",
+            EventType: nameof(AnalysisProcessingCompletedV2Event),
+            OccurredAtUtc: occurredAt,
+            CorrelationId: job.CorrelationId,
+            DiagramAnalysisProcessId: job.DiagramAnalysisProcessId,
+            DiagramProcessingJobId: job.Id,
+            ResultId: result.Id,
+            AttemptNumber: attemptNumber,
+            ProcessingStatus: "Completed",
+            RawAiOutput: result.RawAiOutput,
+            OutputHash: outputHash,
+            Trace: new EventTraceMetadata(
+                ProducerService: _eventPublishingOptions.ProducerService,
+                ProducerVersion: _eventPublishingOptions.ProducerVersion,
+                MessageId: messageId));
+
+        ValidateCompletedV2Event(@event);
+
+        string payload;
+        try
+        {
+            payload = JsonSerializer.Serialize(@event);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to serialize completed v2 event. correlationId={CorrelationId} analysisProcessId={DiagramAnalysisProcessId} jobId={JobId} resultId={ResultId} eventType={EventType} eventVersion={EventVersion}",
+                job.CorrelationId,
+                job.DiagramAnalysisProcessId,
+                job.Id,
+                result.Id,
+                @event.EventType,
+                @event.EventVersion);
+            throw;
+        }
+
+        try
+        {
+            await _messageBus.PublishAsync(@event.EventType, payload, cancellationToken);
+            _logger.LogInformation(
+                "Published completed v2 event. correlationId={CorrelationId} analysisProcessId={DiagramAnalysisProcessId} jobId={JobId} resultId={ResultId} eventType={EventType} eventVersion={EventVersion} messageId={MessageId}",
+                job.CorrelationId,
+                job.DiagramAnalysisProcessId,
+                job.Id,
+                result.Id,
+                @event.EventType,
+                @event.EventVersion,
+                messageId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to publish completed v2 event. correlationId={CorrelationId} analysisProcessId={DiagramAnalysisProcessId} jobId={JobId} resultId={ResultId} eventType={EventType} eventVersion={EventVersion}",
+                job.CorrelationId,
+                job.DiagramAnalysisProcessId,
+                job.Id,
+                result.Id,
+                @event.EventType,
+                @event.EventVersion);
+            throw;
+        }
+    }
+
     private Task PublishFailedAsync(
         DiagramProcessingJob job,
         int attemptNumber,
@@ -182,5 +277,77 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
             nameof(AnalysisProcessingFailedEvent),
             JsonSerializer.Serialize(@event),
             cancellationToken);
+    }
+
+    private async Task PublishFailedV2Async(
+        DiagramProcessingJob job,
+        int attemptNumber,
+        string failureReason,
+        CancellationToken cancellationToken)
+    {
+        if (!_eventPublishingOptions.PublishFailedV2Enabled)
+            return;
+
+        var messageId = Guid.NewGuid().ToString("N");
+        var @event = new AnalysisProcessingFailedV2Event(
+            EventVersion: "2.0.0",
+            EventType: nameof(AnalysisProcessingFailedV2Event),
+            OccurredAtUtc: job.CompletedAt ?? DateTime.UtcNow,
+            CorrelationId: job.CorrelationId,
+            DiagramAnalysisProcessId: job.DiagramAnalysisProcessId,
+            DiagramProcessingJobId: job.Id,
+            AttemptNumber: attemptNumber,
+            FailureReason: failureReason,
+            FailureCode: null,
+            Trace: new EventTraceMetadata(
+                ProducerService: _eventPublishingOptions.ProducerService,
+                ProducerVersion: _eventPublishingOptions.ProducerVersion,
+                MessageId: messageId));
+
+        string payload;
+        try
+        {
+            payload = JsonSerializer.Serialize(@event);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to serialize failed v2 event. correlationId={CorrelationId} analysisProcessId={DiagramAnalysisProcessId} jobId={JobId} eventType={EventType} eventVersion={EventVersion}",
+                job.CorrelationId,
+                job.DiagramAnalysisProcessId,
+                job.Id,
+                @event.EventType,
+                @event.EventVersion);
+            throw;
+        }
+
+        await _messageBus.PublishAsync(@event.EventType, payload, cancellationToken);
+        _logger.LogInformation(
+            "Published failed v2 event. correlationId={CorrelationId} analysisProcessId={DiagramAnalysisProcessId} jobId={JobId} eventType={EventType} eventVersion={EventVersion} messageId={MessageId}",
+            job.CorrelationId,
+            job.DiagramAnalysisProcessId,
+            job.Id,
+            @event.EventType,
+            @event.EventVersion,
+            messageId);
+    }
+
+    private static string BuildSha256Hash(string input)
+    {
+        var bytes = Encoding.UTF8.GetBytes(input);
+        var hash = SHA256.HashData(bytes);
+        return $"sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
+    }
+
+    private static void ValidateCompletedV2Event(AnalysisProcessingCompletedV2Event @event)
+    {
+        if (string.IsNullOrWhiteSpace(@event.CorrelationId)
+            || string.IsNullOrWhiteSpace(@event.RawAiOutput)
+            || string.IsNullOrWhiteSpace(@event.EventType)
+            || string.IsNullOrWhiteSpace(@event.EventVersion))
+        {
+            throw new InvalidOperationException("Completed V2 event contains required fields with empty values.");
+        }
     }
 }

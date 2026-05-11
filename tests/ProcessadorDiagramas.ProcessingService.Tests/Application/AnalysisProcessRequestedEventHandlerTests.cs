@@ -65,6 +65,11 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
         var messageBus = new Mock<IMessageBus>();
         messageBus.Setup(x => x.PublishAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
+        var eventPublishingOptions = new Mock<IEventPublishingOptions>();
+        eventPublishingOptions.SetupGet(x => x.PublishCompletedV2Enabled).Returns(true);
+        eventPublishingOptions.SetupGet(x => x.PublishFailedV2Enabled).Returns(true);
+        eventPublishingOptions.SetupGet(x => x.ProducerService).Returns("ProcessadorDiagramas.ProcessingService");
+        eventPublishingOptions.SetupGet(x => x.ProducerVersion).Returns("1.0.0-test");
 
         var commandHandler = new CreateDiagramProcessingJobCommandHandler(repository.Object);
         var processingHandler = new ProcessDiagramProcessingJobCommandHandler(
@@ -75,6 +80,7 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
             preprocessor.Object,
             aiPipeline.Object,
             messageBus.Object,
+            eventPublishingOptions.Object,
             NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
 
         var handler = new AnalysisProcessRequestedEventHandler(commandHandler, processingHandler, NullLogger<AnalysisProcessRequestedEventHandler>.Instance);
@@ -86,6 +92,7 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
         resultRepository.Verify(x => x.AddAsync(It.IsAny<DiagramProcessingResult>(), It.IsAny<CancellationToken>()), Times.Once);
         messageBus.Verify(x => x.PublishAsync(nameof(AnalysisProcessingStartedEvent), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         messageBus.Verify(x => x.PublishAsync(nameof(AnalysisProcessingCompletedEvent), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        messageBus.Verify(x => x.PublishAsync(nameof(AnalysisProcessingCompletedV2Event), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -93,6 +100,11 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
     {
         var repository = new Mock<IDiagramProcessingJobRepository>();
         var commandHandler = new CreateDiagramProcessingJobCommandHandler(repository.Object);
+        var eventPublishingOptions = new Mock<IEventPublishingOptions>();
+        eventPublishingOptions.SetupGet(x => x.PublishCompletedV2Enabled).Returns(true);
+        eventPublishingOptions.SetupGet(x => x.PublishFailedV2Enabled).Returns(true);
+        eventPublishingOptions.SetupGet(x => x.ProducerService).Returns("ProcessadorDiagramas.ProcessingService");
+        eventPublishingOptions.SetupGet(x => x.ProducerVersion).Returns("1.0.0-test");
         var processingHandler = new ProcessDiagramProcessingJobCommandHandler(
             Mock.Of<IDiagramProcessingJobRepository>(),
             Mock.Of<IDiagramProcessingResultRepository>(),
@@ -101,6 +113,7 @@ public sealed class AnalysisProcessRequestedEventHandlerTests
             Mock.Of<IDiagramPreprocessor>(),
             Mock.Of<IDiagramAiPipeline>(),
             Mock.Of<IMessageBus>(),
+            eventPublishingOptions.Object,
             NullLogger<ProcessDiagramProcessingJobCommandHandler>.Instance);
         var handler = new AnalysisProcessRequestedEventHandler(commandHandler, processingHandler, NullLogger<AnalysisProcessRequestedEventHandler>.Instance);
 
