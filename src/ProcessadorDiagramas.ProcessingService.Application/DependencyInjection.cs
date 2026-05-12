@@ -3,6 +3,7 @@ using ProcessadorDiagramas.ProcessingService.Application.Commands.CreateDiagramP
 using ProcessadorDiagramas.ProcessingService.Application.Commands.ProcessDiagramProcessingJob;
 using ProcessadorDiagramas.ProcessingService.Application.EventHandlers;
 using ProcessadorDiagramas.ProcessingService.Application.Queries.GetDiagramProcessingJob;
+using ProcessadorDiagramas.ProcessingService.Application.Queries.GetDiagramProcessingJobByAnalysisProcessId;
 
 namespace ProcessadorDiagramas.ProcessingService.Application;
 
@@ -13,6 +14,7 @@ public static class DependencyInjection
         services.AddScoped<CreateDiagramProcessingJobCommandHandler>();
         services.AddScoped<ProcessDiagramProcessingJobCommandHandler>();
         services.AddScoped<GetDiagramProcessingJobQueryHandler>();
+        services.AddScoped<GetDiagramProcessingJobByAnalysisProcessIdQueryHandler>();
         services.AddScoped<AnalysisProcessRequestedEventHandler>();
         services.AddScoped<IEventHandler>(serviceProvider =>
             serviceProvider.GetRequiredService<AnalysisProcessRequestedEventHandler>());

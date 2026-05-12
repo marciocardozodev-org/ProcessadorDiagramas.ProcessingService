@@ -1,0 +1,3 @@
+namespace ProcessadorDiagramas.ProcessingService.Application.Queries.GetDiagramProcessingJobByAnalysisProcessId;
+
+public sealed record GetDiagramProcessingJobByAnalysisProcessIdQuery(Guid DiagramAnalysisProcessId);
