@@ -23,7 +23,8 @@ public sealed class CreateDiagramProcessingJobCommandHandler
         var job = DiagramProcessingJob.Create(
             command.DiagramAnalysisProcessId,
             command.InputStorageKey,
-            command.CorrelationId);
+            command.CorrelationId,
+            command.RequestId);
 
         await _repository.AddAsync(job, cancellationToken);
 

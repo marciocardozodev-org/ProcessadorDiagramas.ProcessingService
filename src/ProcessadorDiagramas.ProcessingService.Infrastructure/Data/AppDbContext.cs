@@ -15,6 +15,8 @@ public sealed class AppDbContext : DbContext
 
     public DbSet<DiagramProcessingAttempt> DiagramProcessingAttempts => Set<DiagramProcessingAttempt>();
 
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<DiagramProcessingJob>(entity =>
@@ -25,8 +27,10 @@ public sealed class AppDbContext : DbContext
             entity.Property(current => current.Status).HasConversion<string>().HasMaxLength(50);
             entity.Property(current => current.FailureReason).HasMaxLength(2000);
             entity.Property(current => current.CorrelationId).IsRequired().HasMaxLength(100);
+            entity.Property(current => current.RequestId).IsRequired().HasMaxLength(100);
             entity.HasIndex(current => current.DiagramAnalysisProcessId).IsUnique();
             entity.HasIndex(current => current.CorrelationId);
+            entity.HasIndex(current => current.RequestId);
         });
 
         modelBuilder.Entity<DiagramProcessingResult>(entity =>
@@ -50,6 +54,19 @@ public sealed class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(current => current.DiagramProcessingJobId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OutboxMessage>(entity =>
+        {
+            entity.HasKey(current => current.Id);
+            entity.Property(current => current.EventType).IsRequired().HasMaxLength(200);
+            entity.Property(current => current.Payload).IsRequired();
+            entity.Property(current => current.CorrelationId).IsRequired().HasMaxLength(100);
+            entity.Property(current => current.RequestId).IsRequired().HasMaxLength(100);
+            entity.Property(current => current.LastError).HasMaxLength(2000);
+            entity.HasIndex(current => current.ProcessedAtUtc);
+            entity.HasIndex(current => current.CreatedAtUtc);
+            entity.HasIndex(current => current.RequestId);
         });
     }
 }

@@ -8,6 +8,8 @@ public sealed class AwsSettings
 
     public string QueueUrl { get; set; } = string.Empty;
 
+    public string ArtifactBucket { get; set; } = string.Empty;
+
     public string? ServiceURL { get; set; }
 
     public int MaxNumberOfMessages { get; set; } = 10;

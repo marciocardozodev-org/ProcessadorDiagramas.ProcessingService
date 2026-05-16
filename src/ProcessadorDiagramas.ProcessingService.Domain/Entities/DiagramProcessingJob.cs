@@ -13,6 +13,7 @@ public sealed class DiagramProcessingJob
     public DateTime? CompletedAt { get; private set; }
     public string? FailureReason { get; private set; }
     public string CorrelationId { get; private set; } = string.Empty;
+    public string RequestId { get; private set; } = string.Empty;
     public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
 
@@ -20,7 +21,7 @@ public sealed class DiagramProcessingJob
     {
     }
 
-    public static DiagramProcessingJob Create(Guid diagramAnalysisProcessId, string inputStorageKey, string correlationId)
+    public static DiagramProcessingJob Create(Guid diagramAnalysisProcessId, string inputStorageKey, string correlationId, string? requestId = null)
     {
         if (diagramAnalysisProcessId == Guid.Empty)
             throw new ArgumentException("Diagram analysis process id cannot be empty.", nameof(diagramAnalysisProcessId));
@@ -31,12 +32,17 @@ public sealed class DiagramProcessingJob
         if (string.IsNullOrWhiteSpace(correlationId))
             throw new ArgumentException("Correlation id cannot be empty.", nameof(correlationId));
 
+        var resolvedRequestId = string.IsNullOrWhiteSpace(requestId)
+            ? diagramAnalysisProcessId.ToString("N")
+            : requestId.Trim();
+
         return new DiagramProcessingJob
         {
             Id = Guid.NewGuid(),
             DiagramAnalysisProcessId = diagramAnalysisProcessId,
             InputStorageKey = inputStorageKey.Trim(),
             CorrelationId = correlationId.Trim(),
+            RequestId = resolvedRequestId,
             Status = DiagramProcessingJobStatus.Pending,
             CreatedAt = DateTime.UtcNow
         };

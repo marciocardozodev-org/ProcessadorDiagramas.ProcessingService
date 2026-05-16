@@ -3,4 +3,5 @@ namespace ProcessadorDiagramas.ProcessingService.Application.Commands.CreateDiag
 public sealed record CreateDiagramProcessingJobCommand(
     Guid DiagramAnalysisProcessId,
     string InputStorageKey,
-    string CorrelationId);
+    string CorrelationId,
+    string? RequestId = null);

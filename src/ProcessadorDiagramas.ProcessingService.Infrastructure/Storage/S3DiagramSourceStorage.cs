@@ -21,13 +21,10 @@ public sealed class S3DiagramSourceStorage : IDiagramSourceStorage
         if (string.IsNullOrWhiteSpace(storageKey))
             throw new ArgumentException("Storage key cannot be empty.", nameof(storageKey));
 
-        if (string.IsNullOrWhiteSpace(_settings.BucketName))
-            throw new InvalidOperationException("DiagramSourceStorage:BucketName must be configured for S3 provider.");
-
-        var objectKey = ResolveObjectKey(storageKey);
+        var (bucketName, objectKey) = ResolveBucketAndObjectKey(storageKey);
         using var response = await _s3.GetObjectAsync(new GetObjectRequest
         {
-            BucketName = _settings.BucketName,
+            BucketName = bucketName,
             Key = objectKey
         }, cancellationToken);
 
@@ -41,6 +38,27 @@ public sealed class S3DiagramSourceStorage : IDiagramSourceStorage
             : response.Headers.ContentType;
 
         return new StoredDiagramSource(objectKey, fileName, contentType, memory.ToArray());
+    }
+
+    private (string BucketName, string ObjectKey) ResolveBucketAndObjectKey(string storageKey)
+    {
+        if (storageKey.StartsWith("s3://", StringComparison.OrdinalIgnoreCase))
+        {
+            var withoutScheme = storageKey[5..];
+            var separatorIndex = withoutScheme.IndexOf('/');
+
+            if (separatorIndex <= 0 || separatorIndex == withoutScheme.Length - 1)
+                throw new InvalidOperationException("Storage key in s3:// format must contain bucket and object key.");
+
+            var bucket = withoutScheme[..separatorIndex].Trim();
+            var key = withoutScheme[(separatorIndex + 1)..].TrimStart('/');
+            return (bucket, key);
+        }
+
+        if (string.IsNullOrWhiteSpace(_settings.BucketName))
+            throw new InvalidOperationException("DiagramSourceStorage:BucketName must be configured for S3 provider.");
+
+        return (_settings.BucketName, ResolveObjectKey(storageKey));
     }
 
     private string ResolveObjectKey(string storageKey)

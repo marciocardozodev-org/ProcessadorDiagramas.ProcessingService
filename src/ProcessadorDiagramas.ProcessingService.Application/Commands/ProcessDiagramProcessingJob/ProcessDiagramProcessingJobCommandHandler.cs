@@ -19,6 +19,9 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
     private readonly IDiagramAiPipeline _diagramAiPipeline;
     private readonly IMessageBus _messageBus;
     private readonly IEventPublishingOptions _eventPublishingOptions;
+    private readonly IAnalysisArtifactStorage _analysisArtifactStorage;
+    private readonly IOutboxMessageRepository _outboxMessageRepository;
+    private readonly IOutboxPublisher _outboxPublisher;
     private readonly ILogger<ProcessDiagramProcessingJobCommandHandler> _logger;
 
     public ProcessDiagramProcessingJobCommandHandler(
@@ -31,6 +34,35 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         IMessageBus messageBus,
         IEventPublishingOptions eventPublishingOptions,
         ILogger<ProcessDiagramProcessingJobCommandHandler> logger)
+        : this(
+            jobRepository,
+            resultRepository,
+            attemptRepository,
+            diagramSourceStorage,
+            diagramPreprocessor,
+            diagramAiPipeline,
+            messageBus,
+            eventPublishingOptions,
+            logger,
+            null,
+            null,
+            null)
+    {
+    }
+
+    public ProcessDiagramProcessingJobCommandHandler(
+        IDiagramProcessingJobRepository jobRepository,
+        IDiagramProcessingResultRepository resultRepository,
+        IDiagramProcessingAttemptRepository attemptRepository,
+        IDiagramSourceStorage diagramSourceStorage,
+        IDiagramPreprocessor diagramPreprocessor,
+        IDiagramAiPipeline diagramAiPipeline,
+        IMessageBus messageBus,
+        IEventPublishingOptions eventPublishingOptions,
+        ILogger<ProcessDiagramProcessingJobCommandHandler> logger,
+        IAnalysisArtifactStorage? analysisArtifactStorage,
+        IOutboxMessageRepository? outboxMessageRepository,
+        IOutboxPublisher? outboxPublisher)
     {
         _jobRepository = jobRepository;
         _resultRepository = resultRepository;
@@ -40,6 +72,9 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         _diagramAiPipeline = diagramAiPipeline;
         _messageBus = messageBus;
         _eventPublishingOptions = eventPublishingOptions;
+        _analysisArtifactStorage = analysisArtifactStorage ?? new NoOpAnalysisArtifactStorage();
+        _outboxMessageRepository = outboxMessageRepository ?? new NoOpOutboxMessageRepository();
+        _outboxPublisher = outboxPublisher ?? new NoOpOutboxPublisher();
         _logger = logger;
     }
 
@@ -92,6 +127,14 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
             var persistedResult = DiagramProcessingResult.Create(job.Id, aiResult.RawOutput);
             await _resultRepository.AddAsync(persistedResult, cancellationToken);
 
+            var artifact = await _analysisArtifactStorage.SaveAsync(
+                job.DiagramAnalysisProcessId,
+                job.Id,
+                job.RequestId,
+                attempt.AttemptNumber,
+                aiResult.RawOutput,
+                cancellationToken);
+
             attempt.MarkAsCompleted();
             await _attemptRepository.UpdateAsync(attempt, cancellationToken);
 
@@ -100,6 +143,11 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
 
             await PublishCompletedAsync(job, persistedResult, attempt.AttemptNumber, cancellationToken);
             await PublishCompletedV2Async(job, persistedResult, attempt.AttemptNumber, cancellationToken);
+            await PublishAnalysisCompletedFromOutboxAsync(
+                job,
+                artifact,
+                _diagramAiPipeline.GetType().Name.Contains("Dummy", StringComparison.OrdinalIgnoreCase) ? "mock-mode" : "completed",
+                cancellationToken);
 
             _logger.LogInformation(
                 "Completed processing for job {JobId}, analysis {DiagramAnalysisProcessId}, attempt {AttemptNumber}.",
@@ -143,6 +191,39 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
 
             throw;
         }
+    }
+
+    private async Task PublishAnalysisCompletedFromOutboxAsync(
+        DiagramProcessingJob job,
+        StoredAnalysisArtifact artifact,
+        string status,
+        CancellationToken cancellationToken)
+    {
+        var @event = new AnalysisCompletedEvent(
+            RequestId: job.RequestId,
+            CorrelationId: job.CorrelationId,
+            S3ArtifactBucket: artifact.Bucket,
+            S3ArtifactKey: artifact.Key,
+            Status: status);
+
+        var payload = JsonSerializer.Serialize(@event);
+        var outboxMessage = OutboxMessage.Create(
+            nameof(AnalysisCompletedEvent),
+            payload,
+            job.CorrelationId,
+            job.RequestId);
+
+        await _outboxMessageRepository.AddAsync(outboxMessage, cancellationToken);
+
+        _logger.LogInformation(
+            "Outbox message persisted for AnalysisCompleted. requestId={RequestId} correlationId={CorrelationId} artifactBucket={ArtifactBucket} artifactKey={ArtifactKey} outboxId={OutboxId}",
+            job.RequestId,
+            job.CorrelationId,
+            artifact.Bucket,
+            artifact.Key,
+            outboxMessage.Id);
+
+        await _outboxPublisher.PublishPendingAsync(cancellationToken);
     }
 
     private Task PublishStartedAsync(DiagramProcessingJob job, int attemptNumber, CancellationToken cancellationToken)
@@ -349,5 +430,26 @@ public sealed class ProcessDiagramProcessingJobCommandHandler
         {
             throw new InvalidOperationException("Completed V2 event contains required fields with empty values.");
         }
+    }
+
+    private sealed class NoOpAnalysisArtifactStorage : IAnalysisArtifactStorage
+    {
+        public Task<StoredAnalysisArtifact> SaveAsync(Guid diagramAnalysisProcessId, Guid diagramProcessingJobId, string requestId, int attemptNumber, string rawAiOutput, CancellationToken cancellationToken = default)
+            => Task.FromResult(new StoredAnalysisArtifact("noop", $"noop/{diagramAnalysisProcessId:N}/{diagramProcessingJobId:N}/{attemptNumber}"));
+    }
+
+    private sealed class NoOpOutboxMessageRepository : IOutboxMessageRepository
+    {
+        public Task AddAsync(OutboxMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<IReadOnlyCollection<OutboxMessage>> ListPendingAsync(int maxCount, CancellationToken cancellationToken = default)
+            => Task.FromResult((IReadOnlyCollection<OutboxMessage>)Array.Empty<OutboxMessage>());
+
+        public Task UpdateAsync(OutboxMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class NoOpOutboxPublisher : IOutboxPublisher
+    {
+        public Task PublishPendingAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

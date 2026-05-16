@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using ProcessadorDiagramas.ProcessingService.Application.Interfaces;
 using ProcessadorDiagramas.ProcessingService.Domain.Interfaces;
@@ -39,6 +40,8 @@ public static class DependencyInjection
         services.AddScoped<IDiagramProcessingJobRepository, DiagramProcessingJobRepository>();
         services.AddScoped<IDiagramProcessingResultRepository, DiagramProcessingResultRepository>();
         services.AddScoped<IDiagramProcessingAttemptRepository, DiagramProcessingAttemptRepository>();
+        services.AddScoped<IOutboxMessageRepository, OutboxMessageRepository>();
+        services.AddScoped<IOutboxPublisher, OutboxPublisher>();
         services.AddScoped<IDiagramPreprocessor, DefaultDiagramPreprocessor>();
 
         var storageSection = configuration.GetSection("DiagramSourceStorage");
@@ -56,6 +59,8 @@ public static class DependencyInjection
         {
             services.AddScoped<IDiagramSourceStorage, LocalDiagramSourceStorage>();
         }
+
+        services.AddScoped<DummyAnalysisArtifactStorage>();
 
         services.Configure<AiProviderSettings>(configuration.GetSection("AiProvider"));
         services.Configure<MessagingSettings>(configuration.GetSection("Messaging"));
@@ -90,8 +95,10 @@ public static class DependencyInjection
             services.Configure<AwsSettings>(awsSection);
 
             awsSettings = awsSection.Get<AwsSettings>() ?? new AwsSettings();
+            services.TryAddSingleton<IAmazonS3>(_ => CreateS3Client(awsSettings));
             services.AddSingleton<IAmazonSimpleNotificationService>(_ => CreateSnsClient(awsSettings));
             services.AddSingleton<IAmazonSQS>(_ => CreateSqsClient(awsSettings));
+            services.AddScoped<IAnalysisArtifactStorage, S3AnalysisArtifactStorage>();
 
             if (!string.IsNullOrWhiteSpace(awsSettings.ServiceURL))
                 services.AddScoped<IMessageBus, LocalStackMessageBus>();
@@ -101,10 +108,13 @@ public static class DependencyInjection
             var enableSqsPolling = configuration.GetValue<bool>("Aws:EnableSqsPolling");
             if (enableSqsPolling)
                 services.AddHostedService<ProcessingInboxConsumer>();
+
+            services.AddHostedService<OutboxPublisherWorker>();
         }
         else
         {
             services.AddScoped<IMessageBus, DummyMessageBus>();
+            services.AddScoped<IAnalysisArtifactStorage>(serviceProvider => serviceProvider.GetRequiredService<DummyAnalysisArtifactStorage>());
         }
 
         services.AddScoped<MessageDispatcher>();

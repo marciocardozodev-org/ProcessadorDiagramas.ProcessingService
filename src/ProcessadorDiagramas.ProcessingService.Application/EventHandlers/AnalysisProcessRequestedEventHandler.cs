@@ -45,11 +45,17 @@ public sealed class AnalysisProcessRequestedEventHandler : IEventHandler
 
         try
         {
+            var resolvedInputStorageKey = ResolveInputStorageKey(@event);
+            var resolvedRequestId = string.IsNullOrWhiteSpace(@event.RequestId)
+                ? @event.DiagramAnalysisProcessId.ToString("N")
+                : @event.RequestId;
+
             var response = await _commandHandler.HandleAsync(
                 new CreateDiagramProcessingJobCommand(
                     @event.DiagramAnalysisProcessId,
-                    @event.InputStorageKey,
-                    @event.CorrelationId),
+                    resolvedInputStorageKey,
+                    @event.CorrelationId,
+                    resolvedRequestId),
                 cancellationToken);
 
             await _processingJobCommandHandler.HandleAsync(
@@ -68,5 +74,13 @@ public sealed class AnalysisProcessRequestedEventHandler : IEventHandler
                 "Processing job for analysis process {DiagramAnalysisProcessId} is already registered. Skipping duplicate message.",
                 @event.DiagramAnalysisProcessId);
         }
+    }
+
+    private static string ResolveInputStorageKey(AnalysisProcessRequestedEvent @event)
+    {
+        if (!string.IsNullOrWhiteSpace(@event.S3Bucket) && !string.IsNullOrWhiteSpace(@event.S3Key))
+            return $"s3://{@event.S3Bucket.Trim()}/{@event.S3Key.TrimStart('/')}";
+
+        return @event.InputStorageKey;
     }
 }
